@@ -1,0 +1,3 @@
+[submodule "deps/sonic"]
+	path = deps/sonic
+	url = https://github.com/waywardgeek/sonic

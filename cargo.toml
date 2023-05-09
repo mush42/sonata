@@ -1,0 +1,9 @@
+[workspace]
+
+members = [
+    "piper-model",
+    "piper-synth",
+    "pyper",
+    "espeak-phonemizer",
+    "sonic-sys"
+]

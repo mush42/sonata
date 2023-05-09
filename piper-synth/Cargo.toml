@@ -1,0 +1,8 @@
+[package]
+name = "piper-synth"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sonic-sys = { path = "../sonic-sys" }
+piper-model = { path = "../piper-model" }

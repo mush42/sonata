@@ -1,0 +1,11 @@
+# Piper-rs
+
+A Rust frontend for [piper](https://github.com/rhasspy/piper).
+
+Additionally, the repo includes Python bindings to the Rust wrapper.
+
+
+# License
+
+Copyright (c) 2023 Musharraf Omer. This code is licensed under the  MIT license.
+

@@ -1,0 +1,5 @@
+[env]
+# Always run test sequencially, because functions are not thread safe
+RUST_TEST_THREADS = { value = "1", force = true }
+# Set espeak-ng-data directory
+PIPER_ESPEAKNG_DATA_DIRECTORY = "../deps/windows/espeak-ng-build"
