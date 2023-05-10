@@ -8,8 +8,8 @@ os.environ["PIPER_ESPEAKNG_DATA_DIRECTORY"] = r"D:\projects\blindpandas\piper-rs
 
 
 p = Piper(
-    r"D:\Piper_TTS_Voices\voices\voice-en-us-libritts-high\en-us-libritts-high.onnx.json",
-    r"D:\Piper_TTS_Voices\voices\voice-en-us-libritts-high\en-us-libritts-high.onnx"
+    r"D:\Piper_TTS_Voices\voices\voice-en-us-amy-low\en-us-amy-low.onnx.json",
+    r"D:\Piper_TTS_Voices\voices\voice-en-us-amy-low\en-us-amy-low.onnx"
 )
 
 print(p.synthesize("hello", "0", 1, 1, 1))

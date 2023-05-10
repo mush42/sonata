@@ -21,7 +21,7 @@ const EOS: char = '$';
 const PAD: char = '_';
 
 pub type PiperResult<T> = Result<T, PiperError>;
-use PiperError::{FailedToLoadModel, FailedToLoadModelConfig, InferenceError, PhonemizationError};
+use PiperError::{FailedToLoadModel, FailedToLoadModelConfig, InferenceError, PhonemizationError, OperationError};
 
 lazy_static! {
     static ref _ENVIRONMENT: Arc<ort::Environment> = Arc::new(
@@ -39,6 +39,7 @@ pub enum PiperError {
     FailedToLoadModel(String),
     PhonemizationError(String),
     InferenceError(String),
+    OperationError(String),
 }
 
 impl Error for PiperError {}
@@ -54,6 +55,7 @@ impl fmt::Display for PiperError {
             }
             InferenceError(msg) => format!("Inference Error: `{}`", msg),
             PhonemizationError(msg) => msg.to_string(),
+            OperationError(msg) => msg.to_string(),
         };
         write!(f, "{}", err_message)
     }

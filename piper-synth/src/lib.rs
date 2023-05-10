@@ -1,6 +1,6 @@
 mod utils;
 
-use piper_model::{PiperModel, PiperResult, SynthesisConfig};
+use piper_model::{PiperModel, PiperResult, PiperError, SynthesisConfig};
 use sonic_sys;
 use std::path::PathBuf;
 
@@ -23,9 +23,8 @@ impl AudioOutputConfig {
         }
     }
 
-    fn apply(&self, mut audio: Vec<i16>, sample_rate: u32) -> PiperResult<Vec<i16>> {
-        let mut out_buf: Vec<i16> = vec![0i16; audio.len() * 2];
-        let input_buf = unsafe { std::slice::from_raw_parts_mut(audio.as_mut_ptr(), audio.len()) };
+    fn apply(&self, audio: Vec<i16>, sample_rate: u32) -> PiperResult<Vec<i16>> {
+        let mut out_buf: Vec<i16> = Vec::new();
         unsafe {
             let stream = sonic_sys::sonicCreateStream(sample_rate as i32, 1);
             sonic_sys::sonicSetSpeed(stream, utils::percent_to_param(self.rate, 0.0f32, 4.0f32));
@@ -33,14 +32,21 @@ impl AudioOutputConfig {
             sonic_sys::sonicSetPitch(stream, utils::percent_to_param(self.pitch, 0.0f32, 2.0f32));
             sonic_sys::sonicWriteShortToStream(
                 stream,
-                input_buf.as_ptr(),
-                input_buf.len() as i32 / sample_rate as i32,
+                audio.as_slice().as_ptr(),
+                audio.len() as i32 / sample_rate as i32
             );
             sonic_sys::sonicFlushStream(stream);
             let num_samples = sonic_sys::sonicSamplesAvailable(stream);
-            sonic_sys::sonicReadShortFromStream(stream, out_buf.as_mut_ptr(), num_samples);
+            if num_samples <= 0 {
+                return Err(
+                    PiperError::OperationError(format!("Failed to apply audio config. Sonic error code: {}", num_samples))
+                );
+            }
+            let output_len = (num_samples as u32 * sample_rate) as usize;
+            out_buf.reserve_exact(output_len);
+            sonic_sys::sonicReadShortFromStream(stream, out_buf.spare_capacity_mut().as_mut_ptr().cast(), num_samples);
             sonic_sys::sonicDestroyStream(stream);
-            out_buf.set_len(num_samples as usize * sample_rate as usize);
+            out_buf.set_len(output_len);
         }
         Ok(out_buf)
     }
