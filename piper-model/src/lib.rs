@@ -1,4 +1,4 @@
-use espeak_phonemizer;
+use espeak_phonemizer::{ESpeakError, Phonemes, text_to_phonemes};
 use lazy_static::lazy_static;
 use ndarray::{Array1, Array2};
 use ndarray_stats::QuantileExt;
@@ -21,7 +21,7 @@ const EOS: char = '$';
 const PAD: char = '_';
 
 pub type PiperResult<T> = Result<T, PiperError>;
-use PiperError::{ESpeakError, FailedToLoadModel, FailedToLoadModelConfig, InferenceError};
+use PiperError::{PhonemizationError, FailedToLoadModel, FailedToLoadModelConfig, InferenceError};
 
 lazy_static! {
     static ref _ENVIRONMENT: Arc<ort::Environment> = Arc::new(
@@ -37,7 +37,7 @@ lazy_static! {
 pub enum PiperError {
     FailedToLoadModelConfig(String),
     FailedToLoadModel(String),
-    ESpeakError(String),
+    PhonemizationError(String),
     InferenceError(String),
 }
 
@@ -53,15 +53,15 @@ impl fmt::Display for PiperError {
                 format!("Failed to load onnx model from file: `{}`", filename)
             }
             InferenceError(msg) => format!("Inference Error: `{}`", msg),
-            ESpeakError(msg) => msg.to_string(),
+            PhonemizationError(msg) => msg.to_string(),
         };
         write!(f, "{}", err_message)
     }
 }
 
-impl From<espeak_phonemizer::ESpeakError> for PiperError {
-    fn from(other: espeak_phonemizer::ESpeakError) -> Self {
-        ESpeakError(other.0.clone())
+impl From<ESpeakError> for PiperError {
+    fn from(other: ESpeakError) -> Self {
+        PhonemizationError(other.0.clone())
     }
 }
 
@@ -154,22 +154,23 @@ impl PiperModel {
         text: &str,
         synth_config: Option<SynthesisConfig>,
     ) -> PiperResult<Vec<i16>> {
-        self.synthesize_phonemes(&self.phonemize_text(&text)?, synth_config)
+        self.synthesize_phonemes(self.phonemize_text(&text)?, synth_config)
     }
 
-    pub fn phonemize_text(&self, text: &str) -> PiperResult<String> {
-        Ok(espeak_phonemizer::text_to_phonemes(
+    fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes> {
+        Ok(text_to_phonemes(
             text,
             &self.config.espeak.voice,
             None,
         )?)
     }
 
-    pub fn synthesize_phonemes(
+    fn synthesize_phonemes(
         &self,
-        phonemes: &str,
+        phonemes: Phonemes,
         synth_config: Option<SynthesisConfig>,
     ) -> PiperResult<Vec<i16>> {
+        let phonemes = phonemes.to_string();
         let mut phoneme_ids: Vec<i64> = Vec::with_capacity((phonemes.len() + 1) * 2);
         let pad = self
             .config

@@ -14,9 +14,10 @@ const CLAUSE_INTONATION_FULL_STOP: i32 = 0x00000000;
 const CLAUSE_INTONATION_COMMA: i32 = 0x00001000;
 const CLAUSE_INTONATION_QUESTION: i32 = 0x00002000;
 const CLAUSE_INTONATION_EXCLAMATION: i32 = 0x00003000;
-// const CLAUSE_TYPE_SENTENCE: i32 =  0x00080000;
+const CLAUSE_TYPE_SENTENCE: i32 =  0x00080000;
 
 /// Name of the environment variable that points to the directory that contains `espeak-ng-data` directory
+/// only needed if `espeak-ng-data` directory is not in the expected location (i.e. eSpeak-ng is not installed system wide)
 const PIPER_ESPEAKNG_DATA_DIRECTORY: &str = "PIPER_ESPEAKNG_DATA_DIRECTORY";
 static ESPEAKNG_INIT: OnceCell<ESpeakResult<()>> = OnceCell::new();
 
@@ -30,6 +31,23 @@ impl fmt::Display for ESpeakError {
         write!(f, "eSpeak-ng Error :{}", self.0)
     }
 }
+
+/// A wrapper type that holds sentence phonemes
+pub struct Phonemes(Vec<String>);
+
+impl Phonemes {
+    pub fn sentences(&self) -> &Vec<String> {
+        &self.0
+    }
+}
+
+impl std::string::ToString for Phonemes {
+    fn to_string(&self) -> String {
+        self.0.join(" ")
+    }
+}
+
+
 
 pub fn initialize_espeak_ng() -> ESpeakResult<()> {
     ESPEAKNG_INIT
@@ -68,7 +86,7 @@ pub fn text_to_phonemes(
     text: &str,
     language: &str,
     phoneme_separator: Option<char>,
-) -> ESpeakResult<String> {
+) -> ESpeakResult<Phonemes> {
     initialize_espeak_ng()?;
     let set_voice_res = unsafe { espeakng::espeak_SetVoiceByName(rust_string_to_c(language)) };
     if set_voice_res != espeakng::espeak_ERROR_EE_OK {
@@ -82,34 +100,41 @@ pub fn text_to_phonemes(
         None => espeakng::espeakINITIALIZE_PHONEME_IPA as u32,
     };
     let phoneme_mode: i32 = calculated_phoneme_mode.try_into().unwrap();
+    let mut sent_phonemes = Vec::new();
     let mut phonemes = String::new();
     let mut text_c_char = rust_string_to_c(text) as *const ffi::c_char;
     let text_c_char_ptr = std::ptr::addr_of_mut!(text_c_char);
     let mut terminator: ffi::c_int = 0;
     let terminator_ptr: *mut ffi::c_int = &mut terminator;
     while !text_c_char.is_null() {
-        unsafe {
+        let ph_str = unsafe {
             let res = espeakng::espeak_TextToPhonemes2(
                 text_c_char_ptr,
                 espeakng::espeakCHARS_UTF8.try_into().unwrap(),
                 phoneme_mode,
                 terminator_ptr,
             );
-            let ph_str = FfiStr::from_raw(res);
-            phonemes.push_str(&ph_str.into_string());
-            let intonation = terminator & 0x0000F000;
-            if intonation == CLAUSE_INTONATION_FULL_STOP {
-                phonemes.push('.');
-            } else if intonation == CLAUSE_INTONATION_COMMA {
-                phonemes.push(',');
-            } else if intonation == CLAUSE_INTONATION_QUESTION {
-                phonemes.push('?');
-            } else if intonation == CLAUSE_INTONATION_EXCLAMATION {
-                phonemes.push('!');
-            }
+            FfiStr::from_raw(res)
+        };
+        phonemes.push_str(&ph_str.into_string());
+        let intonation = terminator & 0x0000F000;
+        if intonation == CLAUSE_INTONATION_FULL_STOP {
+            phonemes.push('.');
+        } else if intonation == CLAUSE_INTONATION_COMMA {
+            phonemes.push(',');
+        } else if intonation == CLAUSE_INTONATION_QUESTION {
+            phonemes.push('?');
+        } else if intonation == CLAUSE_INTONATION_EXCLAMATION {
+            phonemes.push('!');
+        }
+        if (terminator & CLAUSE_TYPE_SENTENCE) == CLAUSE_TYPE_SENTENCE {
+            sent_phonemes.push(std::mem::take(&mut phonemes));
         }
     }
-    Ok(phonemes)
+    if !phonemes.is_empty() {
+        sent_phonemes.push(std::mem::take(&mut phonemes));
+    }
+    Ok(Phonemes(sent_phonemes))
 }
 
 // ==============================
@@ -122,7 +147,7 @@ mod tests {
     fn test_basic_en() -> ESpeakResult<()> {
         let text = "test";
         let expected = "tˈɛst.";
-        let phonemes = text_to_phonemes(text, "en-US", None).unwrap();
+        let phonemes = text_to_phonemes(text, "en-US", None)?.to_string();
         assert_eq!(phonemes, expected);
         Ok(())
     }
@@ -131,7 +156,7 @@ mod tests {
     fn test_phoneme_separator() -> ESpeakResult<()> {
         let text = "test";
         let expected = "t_ˈɛ_s_t.";
-        let phonemes = text_to_phonemes(text, "en-US", Some('_')).unwrap();
+        let phonemes = text_to_phonemes(text, "en-US", Some('_')).unwrap().to_string();
         assert_eq!(phonemes, expected);
         Ok(())
     }
@@ -140,7 +165,7 @@ mod tests {
     fn test_arabic() -> ESpeakResult<()> {
         let text = "مَرْحَبَاً بِكَ أَيُّهَا الْرَّجُلْ";
         let expected = "mˈarħabˌaː bikˌa ʔaˈiːuhˌaː alrrˈadʒul.";
-        let phonemes = text_to_phonemes(text, "ar", None)?;
+        let phonemes = text_to_phonemes(text, "ar", None)?.to_string();
         assert_eq!(phonemes, expected);
         Ok(())
     }
@@ -149,7 +174,7 @@ mod tests {
     fn test_it_preserves_clause_breakers() -> ESpeakResult<()> {
         let text =
             "Who are you? said the Caterpillar. Replied Alice , rather shyly, I hardly know, sir!";
-        let phonemes = text_to_phonemes(text, "en-US", None)?;
+        let phonemes = text_to_phonemes(text, "en-US", None)?.to_string();
         let clause_breakers = ['.', ',', '?', '!'];
         for c in clause_breakers {
             assert_eq!(
