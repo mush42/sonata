@@ -143,6 +143,8 @@ pub fn text_to_phonemes(
 mod tests {
     use super::*;
 
+    const TEXT_ALICE: &str = "Who are you? said the Caterpillar. Replied Alice , rather shyly, I hardly know, sir!";
+
     #[test]
     fn test_basic_en() -> ESpeakResult<()> {
         let text = "test";
@@ -153,11 +155,33 @@ mod tests {
     }
 
     #[test]
-    fn test_phoneme_separator() -> ESpeakResult<()> {
+    fn test_it_splits_sentences() -> ESpeakResult<()> {
+        let phonemes = text_to_phonemes(TEXT_ALICE, "en-US", None)?;
+        assert_eq!(phonemes.sentences().len(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn test_it_adds_phoneme_separator() -> ESpeakResult<()> {
         let text = "test";
         let expected = "t_ˈɛ_s_t.";
         let phonemes = text_to_phonemes(text, "en-US", Some('_')).unwrap().to_string();
         assert_eq!(phonemes, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_it_preserves_clause_breakers() -> ESpeakResult<()> {
+        let phonemes = text_to_phonemes(TEXT_ALICE, "en-US", None)?.to_string();
+        let clause_breakers = ['.', ',', '?', '!'];
+        for c in clause_breakers {
+            assert_eq!(
+                phonemes.contains(c),
+                true,
+                "Clause breaker `{}` not preserved",
+                c
+            );
+        }
         Ok(())
     }
 
@@ -170,20 +194,4 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_it_preserves_clause_breakers() -> ESpeakResult<()> {
-        let text =
-            "Who are you? said the Caterpillar. Replied Alice , rather shyly, I hardly know, sir!";
-        let phonemes = text_to_phonemes(text, "en-US", None)?.to_string();
-        let clause_breakers = ['.', ',', '?', '!'];
-        for c in clause_breakers {
-            assert_eq!(
-                phonemes.contains(c),
-                true,
-                "Clause breaker `{}` not preserved",
-                c
-            );
-        }
-        Ok(())
-    }
 }
