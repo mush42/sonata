@@ -8,7 +8,6 @@ pub const DEFAULT_RATE: u8 = 50;
 pub const DEFAULT_VOLUME: u8 = 75;
 pub const DEFAULT_PITCH: u8 = 50;
 
-
 pub struct AudioOutputConfig {
     volume: u8,
     rate: u8,
@@ -32,7 +31,11 @@ impl AudioOutputConfig {
             sonic_sys::sonicSetSpeed(stream, utils::percent_to_param(self.rate, 0.0f32, 4.0f32));
             sonic_sys::sonicSetVolume(stream, utils::percent_to_param(self.volume, 0.0f32, 2.0f32));
             sonic_sys::sonicSetPitch(stream, utils::percent_to_param(self.pitch, 0.0f32, 2.0f32));
-            sonic_sys::sonicWriteShortToStream(stream, input_buf.as_ptr(), input_buf.len() as i32/ sample_rate as i32);
+            sonic_sys::sonicWriteShortToStream(
+                stream,
+                input_buf.as_ptr(),
+                input_buf.len() as i32 / sample_rate as i32,
+            );
             sonic_sys::sonicFlushStream(stream);
             let num_samples = sonic_sys::sonicSamplesAvailable(stream);
             sonic_sys::sonicReadShortFromStream(stream, out_buf.as_mut_ptr(), num_samples);

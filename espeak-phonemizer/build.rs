@@ -12,7 +12,6 @@ fn main() {
     #[cfg(not(target_os = "windows"))]
     println!("cargo:rustc-link-lib=libespeak-ng");
 
-
     #[cfg(target_os = "windows")]
     {
         let win_prebuilt_espeak_ng_directory = manifest_dir

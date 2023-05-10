@@ -14,7 +14,7 @@ const CLAUSE_INTONATION_FULL_STOP: i32 = 0x00000000;
 const CLAUSE_INTONATION_COMMA: i32 = 0x00001000;
 const CLAUSE_INTONATION_QUESTION: i32 = 0x00002000;
 const CLAUSE_INTONATION_EXCLAMATION: i32 = 0x00003000;
-const CLAUSE_TYPE_SENTENCE: i32 =  0x00080000;
+const CLAUSE_TYPE_SENTENCE: i32 = 0x00080000;
 
 /// Name of the environment variable that points to the directory that contains `espeak-ng-data` directory
 /// only needed if `espeak-ng-data` directory is not in the expected location (i.e. eSpeak-ng is not installed system wide)
@@ -46,8 +46,6 @@ impl std::string::ToString for Phonemes {
         self.0.join(" ")
     }
 }
-
-
 
 pub fn initialize_espeak_ng() -> ESpeakResult<()> {
     ESPEAKNG_INIT
@@ -143,7 +141,8 @@ pub fn text_to_phonemes(
 mod tests {
     use super::*;
 
-    const TEXT_ALICE: &str = "Who are you? said the Caterpillar. Replied Alice , rather shyly, I hardly know, sir!";
+    const TEXT_ALICE: &str =
+        "Who are you? said the Caterpillar. Replied Alice , rather shyly, I hardly know, sir!";
 
     #[test]
     fn test_basic_en() -> ESpeakResult<()> {
@@ -165,7 +164,9 @@ mod tests {
     fn test_it_adds_phoneme_separator() -> ESpeakResult<()> {
         let text = "test";
         let expected = "t_ˈɛ_s_t.";
-        let phonemes = text_to_phonemes(text, "en-US", Some('_')).unwrap().to_string();
+        let phonemes = text_to_phonemes(text, "en-US", Some('_'))
+            .unwrap()
+            .to_string();
         assert_eq!(phonemes, expected);
         Ok(())
     }
@@ -193,5 +194,4 @@ mod tests {
         assert_eq!(phonemes, expected);
         Ok(())
     }
-
 }

@@ -1,4 +1,4 @@
-use espeak_phonemizer::{ESpeakError, Phonemes, text_to_phonemes};
+use espeak_phonemizer::{text_to_phonemes, ESpeakError, Phonemes};
 use lazy_static::lazy_static;
 use ndarray::{Array1, Array2};
 use ndarray_stats::QuantileExt;
@@ -21,7 +21,7 @@ const EOS: char = '$';
 const PAD: char = '_';
 
 pub type PiperResult<T> = Result<T, PiperError>;
-use PiperError::{PhonemizationError, FailedToLoadModel, FailedToLoadModelConfig, InferenceError};
+use PiperError::{FailedToLoadModel, FailedToLoadModelConfig, InferenceError, PhonemizationError};
 
 lazy_static! {
     static ref _ENVIRONMENT: Arc<ort::Environment> = Arc::new(
@@ -110,12 +110,22 @@ pub struct SynthesisConfig {
     pub noise_scale: Option<f32>,
     pub length_scale: Option<f32>,
     pub noise_w: Option<f32>,
-    pub speaker: Option<String>
+    pub speaker: Option<String>,
 }
 
 impl SynthesisConfig {
-    pub fn new(noise_scale: Option<f32>, length_scale: Option<f32>, noise_w: Option<f32>, speaker: Option<String>) -> Self {
-        Self { noise_scale, length_scale, noise_w, speaker }
+    pub fn new(
+        noise_scale: Option<f32>,
+        length_scale: Option<f32>,
+        noise_w: Option<f32>,
+        speaker: Option<String>,
+    ) -> Self {
+        Self {
+            noise_scale,
+            length_scale,
+            noise_w,
+            speaker,
+        }
     }
 }
 
@@ -125,11 +135,10 @@ impl From<InferenceConfig> for SynthesisConfig {
             noise_scale: Some(config.noise_scale),
             length_scale: Some(config.length_scale),
             noise_w: Some(config.noise_w),
-            speaker: None
+            speaker: None,
         }
     }
 }
-
 
 pub struct PiperModel {
     pub config: ModelConfig,
@@ -158,11 +167,7 @@ impl PiperModel {
     }
 
     fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes> {
-        Ok(text_to_phonemes(
-            text,
-            &self.config.espeak.voice,
-            None,
-        )?)
+        Ok(text_to_phonemes(text, &self.config.espeak.voice, None)?)
     }
 
     fn synthesize_phonemes(
@@ -233,15 +238,25 @@ impl PiperModel {
         input_tensors.push(InputTensor::from_array(input_lengths.into_dyn()));
 
         let scales = Array1::<f32>::from_iter([
-            synth_config.noise_scale.unwrap_or(self.config.inference.noise_scale),
-            synth_config.length_scale.unwrap_or(self.config.inference.length_scale),
-            synth_config.noise_w.unwrap_or(self.config.inference.noise_w),
+            synth_config
+                .noise_scale
+                .unwrap_or(self.config.inference.noise_scale),
+            synth_config
+                .length_scale
+                .unwrap_or(self.config.inference.length_scale),
+            synth_config
+                .noise_w
+                .unwrap_or(self.config.inference.noise_w),
         ]);
         input_tensors.push(InputTensor::from_array(scales.into_dyn()));
 
-        if self.config.num_speakers > 1{
+        if self.config.num_speakers > 1 {
             let speaker_identifier = synth_config.speaker.unwrap_or("".to_string());
-            let sid = self.config.speaker_id_map.get(&speaker_identifier).unwrap_or(&0);
+            let sid = self
+                .config
+                .speaker_id_map
+                .get(&speaker_identifier)
+                .unwrap_or(&0);
             let sid_tensor = Array1::<i64>::from_iter([sid.clone()]);
             input_tensors.push(InputTensor::from_array(sid_tensor.into_dyn()));
         }
