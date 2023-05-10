@@ -12,4 +12,4 @@ p = Piper(
     r"D:\Piper_TTS_Voices\voices\voice-en-us-libritts-high\en-us-libritts-high.onnx"
 )
 
-print(p.synthesize("hello", 1, 1, 1, None))
+print(p.synthesize("hello", "0", 1, 1, 1))

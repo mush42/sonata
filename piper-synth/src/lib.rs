@@ -25,21 +25,21 @@ impl AudioOutputConfig {
     }
 
     fn apply(&self, mut audio: Vec<i16>, sample_rate: u32) -> PiperResult<Vec<i16>> {
-        audio.reserve(audio.len() * 2);
+        let mut out_buf: Vec<i16> = vec![0i16; audio.len() * 2];
+        let input_buf = unsafe { std::slice::from_raw_parts_mut(audio.as_mut_ptr(), audio.len()) };
         unsafe {
-            sonic_sys::sonicChangeShortSpeed(
-                audio.as_mut_ptr(),
-                audio.len() as i32 / sample_rate as i32,
-                utils::percent_to_param(self.rate, 0.0f32, 4.0f32),
-                utils::percent_to_param(self.pitch, 0.0f32, 2.0f32),
-                1.0,
-                utils::percent_to_param(self.volume, 0.0f32, 1.0f32),
-                0,
-                sample_rate as i32,
-                1,
-            );
+            let stream = sonic_sys::sonicCreateStream(sample_rate as i32, 1);
+            sonic_sys::sonicSetSpeed(stream, utils::percent_to_param(self.rate, 0.0f32, 4.0f32));
+            sonic_sys::sonicSetVolume(stream, utils::percent_to_param(self.volume, 0.0f32, 2.0f32));
+            sonic_sys::sonicSetPitch(stream, utils::percent_to_param(self.pitch, 0.0f32, 2.0f32));
+            sonic_sys::sonicWriteShortToStream(stream, input_buf.as_ptr(), input_buf.len() as i32/ sample_rate as i32);
+            sonic_sys::sonicFlushStream(stream);
+            let num_samples = sonic_sys::sonicSamplesAvailable(stream);
+            sonic_sys::sonicReadShortFromStream(stream, out_buf.as_mut_ptr(), num_samples);
+            sonic_sys::sonicDestroyStream(stream);
+            out_buf.set_len(num_samples as usize * sample_rate as usize);
         }
-        Ok(audio)
+        Ok(out_buf)
     }
 }
 
