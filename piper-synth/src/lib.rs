@@ -39,7 +39,7 @@ impl AudioOutputConfig {
             let num_samples = sonic_sys::sonicSamplesAvailable(stream);
             if num_samples <= 0 {
                 return Err(
-                    PiperError::OperationError(format!("Failed to apply audio config. Sonic error code: {}", num_samples))
+                    PiperError::OperationError(format!("Sonic Error: failed to apply audio config. Sonic error code: {}", num_samples))
                 );
             }
             let output_len = (num_samples as u32 * sample_rate) as usize;
