@@ -43,7 +43,6 @@ impl Phonemes {
     pub fn to_vec(self) -> Vec<String> {
         self.0
     }
-
 }
 
 impl std::string::ToString for Phonemes {

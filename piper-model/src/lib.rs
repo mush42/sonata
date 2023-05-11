@@ -21,7 +21,9 @@ const EOS: char = '$';
 const PAD: char = '_';
 
 pub type PiperResult<T> = Result<T, PiperError>;
-use PiperError::{FailedToLoadModel, FailedToLoadModelConfig, InferenceError, PhonemizationError, OperationError};
+use PiperError::{
+    FailedToLoadModel, FailedToLoadModelConfig, InferenceError, OperationError, PhonemizationError,
+};
 
 lazy_static! {
     static ref _ENVIRONMENT: Arc<ort::Environment> = Arc::new(
@@ -139,16 +141,12 @@ impl PiperWaveSamples {
     }
 
     pub fn as_wave_bytes(&self) -> Vec<u8> {
-        self.0
-            .iter()
-            .map(|i| i.to_le_bytes())
-            .flatten()
-            .collect()
+        self.0.iter().map(|i| i.to_le_bytes()).flatten().collect()
     }
 }
 
 impl IntoIterator for PiperWaveSamples {
-   type Item = i16;
+    type Item = i16;
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -168,7 +166,6 @@ impl From<PiperWaveSamples> for Vec<i16> {
     }
 }
 
-
 pub struct PiperModel {
     pub config: ModelConfig,
     onnx_path: PathBuf,
@@ -187,31 +184,15 @@ impl PiperModel {
         }
     }
 
-    pub fn generate_speech(
-        &self,
-        text: &str,
-        synth_config: Option<SynthesisConfig>,
-    ) -> PiperResult<SpeechGenerator> {
-        Ok(SpeechGenerator {
-            model: &self,
-            text: text.to_string(),
-            synth_config: synth_config,
-            sentence_phonemes: None
-        })
-    }
-
     pub fn speak_text(
         &self,
         text: &str,
         synth_config: &Option<SynthesisConfig>,
     ) -> PiperResult<PiperWaveSamples> {
-        self.synthesize_phonemes(
-            self.phonemize_text(&text)?.to_string(),
-            &synth_config
-        )
+        self.speak_phonemes(self.phonemize_text(&text)?.to_string(), &synth_config)
     }
 
-    pub fn synthesize_phonemes(
+    pub fn speak_phonemes(
         &self,
         phonemes: String,
         synth_config: &Option<SynthesisConfig>,
@@ -251,7 +232,7 @@ impl PiperModel {
         self.infer_with_values(phoneme_ids, synth_config)
     }
 
-    fn infer_with_values(
+    pub fn infer_with_values(
         &self,
         phoneme_ids: Vec<i64>,
         synth_config: &Option<SynthesisConfig>,
@@ -268,8 +249,10 @@ impl PiperModel {
 
         let (noise_scale, length_scale, noise_w, speaker) = if let Some(ref conf) = synth_config {
             (
-                conf.noise_scale.unwrap_or(self.config.inference.noise_scale),
-                conf.length_scale.unwrap_or(self.config.inference.length_scale),
+                conf.noise_scale
+                    .unwrap_or(self.config.inference.noise_scale),
+                conf.length_scale
+                    .unwrap_or(self.config.inference.length_scale),
                 conf.noise_w.unwrap_or(self.config.inference.noise_w),
                 conf.speaker.clone().unwrap_or(Default::default()),
             )
@@ -278,7 +261,7 @@ impl PiperModel {
                 self.config.inference.noise_scale,
                 self.config.inference.length_scale,
                 self.config.inference.noise_w,
-                Default::default()
+                Default::default(),
             )
         };
 
@@ -295,11 +278,7 @@ impl PiperModel {
         input_tensors.push(InputTensor::from_array(scales.into_dyn()));
 
         if self.config.num_speakers > 1 {
-            let sid = self
-                .config
-                .speaker_id_map
-                .get(&speaker)
-                .unwrap_or(&0);
+            let sid = self.config.speaker_id_map.get(&speaker).unwrap_or(&0);
             let sid_tensor = Array1::<i64>::from_iter([sid.clone()]);
             input_tensors.push(InputTensor::from_array(sid_tensor.into_dyn()));
         }
@@ -324,7 +303,7 @@ impl PiperModel {
         Ok(samples.into())
     }
 
-    fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes> {
+    pub fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes> {
         Ok(text_to_phonemes(text, &self.config.espeak.voice, None)?)
     }
 
@@ -390,33 +369,5 @@ impl PiperModel {
             }
         };
         Ok(model_config)
-    }
-}
-
-pub struct SpeechGenerator <'a>
-{
-    model: &'a PiperModel,
-    text: String,
-    synth_config: Option<SynthesisConfig>,
-    sentence_phonemes: Option<std::vec::IntoIter<String>>
-}
-
-impl<'a> Iterator for SpeechGenerator<'a> {
-    type Item = PiperResult<PiperWaveSamples>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let sent_phonemes = match self.sentence_phonemes {
-            Some(ref mut ph) => ph,
-            None => {
-                match self.model.phonemize_text(&self.text) {
-                    Ok(ph) => self.sentence_phonemes.insert(ph.to_vec().into_iter()),
-                    Err(e) => return Some(Err(e))
-                }
-            }
-        };
-        match sent_phonemes.next() {
-            Some(sent_phonemes) => Some(self.model.synthesize_phonemes(sent_phonemes, &self.synth_config)),
-            None => None
-        }
     }
 }
