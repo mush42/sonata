@@ -51,14 +51,10 @@ impl Piper {
             self.0.synthesize(
                 text,
                 Some(SynthesisConfig::new(None, None, None, speaker)),
-                Some(AudioOutputConfig::new(volume, rate, pitch)),
+                Some(AudioOutputConfig::new(rate, volume, pitch)),
             )
         })?;
-        let audio_bytes: Vec<u8> = audio_data
-            .iter()
-            .map(|i| i.to_ne_bytes())
-            .flatten()
-            .collect();
+        let audio_bytes = py.allow_threads(move || { audio_data.as_wave_bytes() });
         Ok(PyBytes::new(py, &audio_bytes).into())
     }
 }
