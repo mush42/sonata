@@ -28,7 +28,7 @@ impl AudioOutputConfig {
         }
     }
 
-    fn any_option_set(&self) -> bool {
+    fn has_any_option_set(&self) -> bool {
         self.rate.is_some() || self.volume.is_some() || self.pitch.is_some()
     }
 
@@ -92,13 +92,7 @@ impl PiperSpeechSynthesizer {
         synth_config: Option<SynthesisConfig>,
         output_config: Option<AudioOutputConfig>,
     ) -> PiperSpeechGenerator {
-        PiperSpeechGenerator {
-            model: Arc::clone(&self.0),
-            text: text,
-            synth_config: synth_config,
-            output_config: output_config,
-            sentence_phonemes: None,
-        }
+        PiperSpeechGenerator::new(Arc::clone(&self.0), text, synth_config, output_config)
     }
 
     pub fn info(&self) -> PiperResult<Vec<String>> {
@@ -115,14 +109,30 @@ pub struct PiperSpeechGenerator {
 }
 
 impl PiperSpeechGenerator {
+    fn new(
+        model: Arc<PiperModel>,
+        text: String,
+        synth_config: Option<SynthesisConfig>,
+        output_config: Option<AudioOutputConfig>,
+    ) -> Self {
+        Self {
+            model,
+            text,
+            synth_config,
+            output_config,
+            sentence_phonemes: None,
+        }
+    }
+
     pub fn get_sample_rate(&self) -> u32 {
         self.model.config.audio.sample_rate
     }
+
     fn process_phonemes(&self, phonemes: String) -> PiperResult<PiperWaveSamples> {
         let audio = self.model.speak_phonemes(phonemes, &self.synth_config)?;
         match self.output_config {
             Some(ref config) => {
-                if !config.any_option_set() {
+                if !config.has_any_option_set() {
                     return Ok(audio);
                 }
                 Ok(config
