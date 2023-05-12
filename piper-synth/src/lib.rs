@@ -1,6 +1,8 @@
 mod utils;
 
 use piper_model::{PiperError, PiperModel, PiperResult, PiperWaveSamples, SynthesisConfig};
+use once_cell::sync::OnceCell;
+use rayon::prelude::*;
 use sonic_sys;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -91,8 +93,14 @@ impl PiperSpeechSynthesizer {
         text: String,
         synth_config: Option<SynthesisConfig>,
         output_config: Option<AudioOutputConfig>,
-    ) -> PiperSpeechStream {
-        PiperSpeechStream::<Lazy>::new(Arc::clone(&self.0), text, synth_config, output_config)
+    ) -> PiperResult<PiperSpeechStream> {
+        let task = PiperSpeechSynthesisTask {
+            model: Arc::clone(&self.0),
+            text,
+            synth_config,
+            output_config
+        };
+        PiperSpeechStream::<Lazy>::new(task)
     }
 
     pub fn info(&self) -> PiperResult<Vec<String>> {
@@ -100,51 +108,36 @@ impl PiperSpeechSynthesizer {
     }
 }
 
-
 pub enum PiperStreamingMode {
     Lazy,
     Parallel,
     Batched,
 }
 
-
+/// The following marker types represent how the speech stream generate it's results
+/// assuming that it takes t_i to speak each sentence
+/// Lazy: takes sum(t_i) to speak the whole text
 pub struct Lazy;
+/// Parallel: takes utmost max(t_i) to speak the whole text
 pub struct Parallel;
-pub struct Batched;
+/// Incremental: takes at least  max(t_i) to speak the whole text
+/// there is a good chance that the next sentence's speech whill be ready when requested
+pub struct Incremental;
 
-
-pub struct PiperSpeechStream<Mode = Lazy> {
-    model: Arc<PiperModel>,
+pub struct PiperSpeechSynthesisTask {
+    pub model: Arc<PiperModel>,
     text: String,
     synth_config: Option<SynthesisConfig>,
     output_config: Option<AudioOutputConfig>,
-    sentence_phonemes: Option<std::vec::IntoIter<String>>,
-    mode: std::marker::PhantomData<Mode>,
 }
 
-
-
-impl<Mode> PiperSpeechStream<Mode>{
-    fn new(
-        model: Arc<PiperModel>,
-        text: String,
-        synth_config: Option<SynthesisConfig>,
-        output_config: Option<AudioOutputConfig>,
-    ) -> Self{
-        Self {
-            model,
-            text,
-            synth_config,
-            output_config,
-            sentence_phonemes: None,
-            mode: std::marker::PhantomData
-        }
-    }
-
+impl PiperSpeechSynthesisTask {
     pub fn get_sample_rate(&self) -> u32 {
         self.model.config.audio.sample_rate
     }
-
+    fn get_phonemes(&self) -> PiperResult<Vec<String>> {
+        Ok(self.model.phonemize_text(&self.text)?.to_vec())
+    }
     fn process_phonemes(&self, phonemes: String) -> PiperResult<PiperWaveSamples> {
         let audio = self.model.speak_phonemes(phonemes, &self.synth_config)?;
         match self.output_config {
@@ -162,47 +155,113 @@ impl<Mode> PiperSpeechStream<Mode>{
 }
 
 
+pub struct PiperSpeechStream<Mode = Lazy> {
+    task: Arc<PiperSpeechSynthesisTask>,
+    sentence_phonemes: Option<std::vec::IntoIter<String>>,
+    precalculated_results: Option<std::vec::IntoIter<PiperResult<PiperWaveSamples>>>,
+    channel: Option<Channel>,
+    mode: std::marker::PhantomData<Mode>,
+}
+
+
+impl<Mode> PiperSpeechStream<Mode> {
+    fn new(task: PiperSpeechSynthesisTask) -> PiperResult<Self> {
+        Ok(Self {
+            task: Arc::new(task),
+            sentence_phonemes: None,
+            precalculated_results: None,
+            channel: None,
+            mode: std::marker::PhantomData,
+        })
+    }
+}
+
 impl Iterator for PiperSpeechStream<Lazy> {
     type Item = PiperResult<PiperWaveSamples>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let sent_phonemes = match self.sentence_phonemes {
+        let sent_phoneme_iter = match self.sentence_phonemes {
             Some(ref mut ph) => ph,
-            None => match self.model.phonemize_text(&self.text) {
-                Ok(ph) => self.sentence_phonemes.insert(ph.to_vec().into_iter()),
+            None => match self.task.get_phonemes() {
+                Ok(ph) => self.sentence_phonemes.insert(ph.into_iter()),
                 Err(e) => return Some(Err(e)),
             },
         };
-        match sent_phonemes.next() {
-            Some(sent_phonemes) => Some(self.process_phonemes(sent_phonemes)),
+        match sent_phoneme_iter.next() {
+            Some(sent_phonemes) => Some(self.task.process_phonemes(sent_phonemes)),
             None => None,
         }
     }
 }
 
-
-
-
-// ====================
 impl Iterator for PiperSpeechStream<Parallel> {
     type Item = PiperResult<PiperWaveSamples>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let sent_phonemes = match self.sentence_phonemes {
-            Some(ref mut ph) => ph,
-            None => match self.model.phonemize_text(&self.text) {
-                Ok(ph) => self.sentence_phonemes.insert(ph.to_vec().into_iter()),
+        if self.precalculated_results.is_none() {
+            let phonemes = match self.task.get_phonemes() {
+                Ok(ph) => ph,
                 Err(e) => return Some(Err(e)),
-            },
-        };
-        match sent_phonemes.next() {
-            Some(sent_phonemes) => Some(self.process_phonemes(sent_phonemes)),
+            };
+            let calculated_result: Vec<PiperResult<PiperWaveSamples>> = phonemes
+                .par_iter()
+                .map(|ph| self.task.process_phonemes(ph.to_string()))
+                .collect();
+            self.precalculated_results = Some(calculated_result.into_iter());
+        }
+        match self.precalculated_results {
+            Some(ref mut res_iter) => res_iter.next(),
             None => None,
         }
     }
 }
 
+impl Iterator for PiperSpeechStream<Incremental> {
+    type Item = PiperResult<PiperWaveSamples>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.channel.is_none() {
+            let (sender, receiver) = crossbeam_channel::unbounded();
+            let ch = Channel { sender: sender, receiver: receiver};
+            self.channel = Some(ch);
+        }
+        let sent_phoneme_iter = match self.sentence_phonemes {
+            Some(ref mut ph) => ph,
+            None => match self.task.get_phonemes() {
+                Ok(ph) => self.sentence_phonemes.insert(ph.into_iter()),
+                Err(e) => return Some(Err(e)),
+            },
+        };
+        match sent_phoneme_iter.next() {
+            Some(item) => {
+                match self.channel {
+                    Some(ref ch) => Some(ch.receiver.recv().unwrap().result.into_inner().unwrap()),
+                    None => None
+                }
+            },
+            None => None
+        }
+    }
+}
 
 
+struct SpeechSynthesisResult {
+    task: Arc<PiperSpeechSynthesisTask>,
+    phonemes: String,
+    result: OnceCell<PiperResult<PiperWaveSamples>>
+}
+
+impl SpeechSynthesisResult {
+    fn new(task: Arc<PiperSpeechSynthesisTask>, phonemes: String) -> Self {
+        Self { task, phonemes, result: OnceCell::new() }
+    }
+    fn generate(&self)  {
+        self.result.set(self.task.process_phonemes(self.phonemes.clone()));
+    }
+}
 
 
+struct Channel {
+    sender: crossbeam_channel::Sender<SpeechSynthesisResult>,
+    receiver: crossbeam_channel::Receiver<SpeechSynthesisResult>
+}
