@@ -91,8 +91,8 @@ impl PiperSpeechSynthesizer {
         text: String,
         synth_config: Option<SynthesisConfig>,
         output_config: Option<AudioOutputConfig>,
-    ) -> PiperSpeechGenerator {
-        PiperSpeechGenerator::new(Arc::clone(&self.0), text, synth_config, output_config)
+    ) -> PiperSpeechStream {
+        PiperSpeechStream::<Lazy>::new(Arc::clone(&self.0), text, synth_config, output_config)
     }
 
     pub fn info(&self) -> PiperResult<Vec<String>> {
@@ -100,27 +100,44 @@ impl PiperSpeechSynthesizer {
     }
 }
 
-pub struct PiperSpeechGenerator {
+
+pub enum PiperStreamingMode {
+    Lazy,
+    Parallel,
+    Batched,
+}
+
+
+pub struct Lazy;
+pub struct Parallel;
+pub struct Batched;
+
+
+pub struct PiperSpeechStream<Mode = Lazy> {
     model: Arc<PiperModel>,
     text: String,
     synth_config: Option<SynthesisConfig>,
     output_config: Option<AudioOutputConfig>,
     sentence_phonemes: Option<std::vec::IntoIter<String>>,
+    mode: std::marker::PhantomData<Mode>,
 }
 
-impl PiperSpeechGenerator {
+
+
+impl<Mode> PiperSpeechStream<Mode>{
     fn new(
         model: Arc<PiperModel>,
         text: String,
         synth_config: Option<SynthesisConfig>,
         output_config: Option<AudioOutputConfig>,
-    ) -> Self {
+    ) -> Self{
         Self {
             model,
             text,
             synth_config,
             output_config,
             sentence_phonemes: None,
+            mode: std::marker::PhantomData
         }
     }
 
@@ -144,7 +161,8 @@ impl PiperSpeechGenerator {
     }
 }
 
-impl Iterator for PiperSpeechGenerator {
+
+impl Iterator for PiperSpeechStream<Lazy> {
     type Item = PiperResult<PiperWaveSamples>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -161,3 +179,30 @@ impl Iterator for PiperSpeechGenerator {
         }
     }
 }
+
+
+
+
+// ====================
+impl Iterator for PiperSpeechStream<Parallel> {
+    type Item = PiperResult<PiperWaveSamples>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let sent_phonemes = match self.sentence_phonemes {
+            Some(ref mut ph) => ph,
+            None => match self.model.phonemize_text(&self.text) {
+                Ok(ph) => self.sentence_phonemes.insert(ph.to_vec().into_iter()),
+                Err(e) => return Some(Err(e)),
+            },
+        };
+        match sent_phonemes.next() {
+            Some(sent_phonemes) => Some(self.process_phonemes(sent_phonemes)),
+            None => None,
+        }
+    }
+}
+
+
+
+
+
