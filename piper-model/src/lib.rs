@@ -189,12 +189,12 @@ impl PiperModel {
         text: &str,
         synth_config: &Option<SynthesisConfig>,
     ) -> PiperResult<PiperWaveSamples> {
-        self.speak_phonemes(self.phonemize_text(&text)?.to_string(), &synth_config)
+        self.speak_phonemes(&self.phonemize_text(&text)?.to_string(), &synth_config)
     }
 
     pub fn speak_phonemes(
         &self,
-        phonemes: String,
+        phonemes: &str,
         synth_config: &Option<SynthesisConfig>,
     ) -> PiperResult<PiperWaveSamples> {
         let mut phoneme_ids: Vec<i64> = Vec::with_capacity((phonemes.len() + 1) * 2);

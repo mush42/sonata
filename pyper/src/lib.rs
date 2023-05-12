@@ -1,5 +1,5 @@
 use piper_model::{PiperError, PiperWaveSamples, SynthesisConfig};
-use piper_synth::{AudioOutputConfig, PiperSpeechGenerator, PiperSpeechSynthesizer};
+use piper_synth::{AudioOutputConfig, PiperSpeechSynthesizer, PiperSpeechStream, SpeechStreamMode };
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -41,16 +41,16 @@ impl WaveSamples {
 }
 
 #[pyclass(weakref, module = "piper")]
-struct SpeechGenerator(PiperSpeechGenerator);
+struct SpeechStream(PiperSpeechStream);
 
-impl From<PiperSpeechGenerator> for SpeechGenerator {
-    fn from(other: PiperSpeechGenerator) -> Self {
+impl From<PiperSpeechStream> for SpeechStream {
+    fn from(other: PiperSpeechStream) -> Self {
         Self(other)
     }
 }
 
 #[pymethods]
-impl SpeechGenerator {
+impl SpeechStream {
     fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }
@@ -95,14 +95,22 @@ impl Piper {
         rate: Option<u8>,
         volume: Option<u8>,
         pitch: Option<u8>,
-    ) -> SpeechGenerator {
-        self.0
+        eager: Option<bool>
+    ) -> PyPiperResult<SpeechStream> {
+        let mode = {
+            if eager.unwrap_or(false) {
+                SpeechStreamMode::Eager
+            } else {
+                SpeechStreamMode::Lazy
+            }
+        };
+        Ok(self.0
             .synthesize(
                 text,
                 Some(SynthesisConfig::new(None, None, None, speaker)),
                 Some(AudioOutputConfig::new(rate, volume, pitch)),
-            )
-            .into()
+                mode
+            )?.into())
     }
 }
 
@@ -110,7 +118,7 @@ impl Piper {
 #[pymodule]
 fn pyper(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<WaveSamples>()?;
-    m.add_class::<SpeechGenerator>()?;
+    m.add_class::<SpeechStream>()?;
     m.add_class::<Piper>()?;
     Ok(())
 }

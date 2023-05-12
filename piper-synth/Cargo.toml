@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 sonic-sys = { path = "../sonic-sys" }
 piper-model = { path = "../piper-model" }
+rayon = "1.7.0"

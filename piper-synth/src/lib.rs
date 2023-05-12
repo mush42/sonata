@@ -2,8 +2,10 @@ mod utils;
 
 use piper_model::{PiperError, PiperModel, PiperResult, PiperWaveSamples, SynthesisConfig};
 use sonic_sys;
+use rayon::prelude::*;
 use std::path::PathBuf;
 use std::sync::Arc;
+
 
 const RATE_RANGE: (f32, f32) = (0.0f32, 5.0f32);
 const VOLUME_RANGE: (f32, f32) = (0.1f32, 1.9f32);
@@ -91,14 +93,26 @@ impl PiperSpeechSynthesizer {
         text: String,
         synth_config: Option<SynthesisConfig>,
         output_config: Option<AudioOutputConfig>,
-    ) -> PiperSpeechGenerator {
-        PiperSpeechGenerator::new(Arc::clone(&self.0), text, synth_config, output_config)
+        mode: SpeechStreamMode,
+    ) -> PiperResult<PiperSpeechStream> {
+        PiperSpeechStream::new(
+            PiperSpeechGenerator::new(Arc::clone(&self.0), text, synth_config, output_config),
+            mode,
+            self.0.config.audio.sample_rate
+        )
     }
 
     pub fn info(&self) -> PiperResult<Vec<String>> {
         self.0.info()
     }
 }
+
+
+pub enum SpeechStreamMode {
+    Lazy,
+    Eager
+}
+
 
 pub struct PiperSpeechGenerator {
     model: Arc<PiperModel>,
@@ -124,11 +138,7 @@ impl PiperSpeechGenerator {
         }
     }
 
-    pub fn get_sample_rate(&self) -> u32 {
-        self.model.config.audio.sample_rate
-    }
-
-    fn process_phonemes(&self, phonemes: String) -> PiperResult<PiperWaveSamples> {
+    fn process_phonemes(&self, phonemes: &str) -> PiperResult<PiperWaveSamples> {
         let audio = self.model.speak_phonemes(phonemes, &self.synth_config)?;
         match self.output_config {
             Some(ref config) => {
@@ -156,8 +166,40 @@ impl Iterator for PiperSpeechGenerator {
             },
         };
         match sent_phonemes.next() {
-            Some(sent_phonemes) => Some(self.process_phonemes(sent_phonemes)),
+            Some(sent_phonemes) => Some(self.process_phonemes(&sent_phonemes)),
             None => None,
         }
+    }
+}
+
+
+pub struct PiperSpeechStream(Box<dyn Iterator<Item = PiperResult<PiperWaveSamples>> + Send>, u32);
+
+impl PiperSpeechStream {
+    fn new(gen: PiperSpeechGenerator, mode: SpeechStreamMode, sample_rate: u32) -> PiperResult<Self> {
+        match mode {
+            SpeechStreamMode::Lazy => Ok(Self(Box::new(gen), sample_rate)),
+            SpeechStreamMode::Eager => {
+                let speech_iter: Vec<PiperResult<PiperWaveSamples>> = gen.model.phonemize_text(&gen.text)?
+                    .to_vec()
+                    .into_par_iter()
+                    .map(|phonemes| gen.process_phonemes(&phonemes))
+                    .collect();
+                Ok(Self(Box::new(speech_iter.into_iter()), sample_rate))
+            }
+        }
+    }
+
+    pub fn get_sample_rate(&self) -> u32 {
+        self.1
+    }
+
+}
+
+impl Iterator for PiperSpeechStream {
+    type Item = PiperResult<PiperWaveSamples>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
     }
 }
