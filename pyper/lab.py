@@ -12,4 +12,4 @@ p = Piper(
     r"D:\Piper_TTS_Voices\voices\voice-en-us-amy-low\en-us-amy-low.onnx"
 )
 
-ret = p.synthesize("hello", "0", 40, 40, 40)
+ret = p.synthesize_batched("hello", "0", 40, 40, 40, 3)

@@ -21,6 +21,7 @@ const EOS: char = '$';
 const PAD: char = '_';
 
 pub type PiperResult<T> = Result<T, PiperError>;
+pub type PiperWaveResult = PiperResult<PiperWaveSamples>;
 use PiperError::{
     FailedToLoadModel, FailedToLoadModelConfig, InferenceError, OperationError, PhonemizationError,
 };
@@ -133,15 +134,61 @@ impl SynthesisConfig {
     }
 }
 
-pub struct PiperWaveSamples(Vec<i16>);
+#[derive(Debug, Clone)]
+pub struct PiperWaveInfo {
+    pub sample_rate: usize,
+    pub num_channels: usize,
+    pub sample_width: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct PiperWaveSamples {
+    samples: Vec<i16>,
+    info: PiperWaveInfo,
+}
 
 impl PiperWaveSamples {
-    pub fn to_vec(self) -> Vec<i16> {
-        self.0
+    pub fn new(samples: Vec<i16>, sample_rate: usize) -> Self {
+        Self {
+            samples,
+            info: PiperWaveInfo {
+                sample_rate: sample_rate,
+                num_channels: 1,
+                sample_width: 2,
+            },
+        }
+    }
+
+    pub fn from_raw(samples: Vec<i16>, info: PiperWaveInfo) -> Self {
+        Self { samples, info }
+    }
+
+    pub fn into_raw(self) -> (Vec<i16>, PiperWaveInfo) {
+        (self.samples, self.info)
     }
 
     pub fn as_wave_bytes(&self) -> Vec<u8> {
-        self.0.iter().map(|i| i.to_le_bytes()).flatten().collect()
+        self.samples
+            .iter()
+            .map(|i| i.to_le_bytes())
+            .flatten()
+            .collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.samples.len()
+    }
+
+    pub fn sample_rate(&self) -> usize {
+        self.info.sample_rate
+    }
+
+    pub fn num_channels(&self) -> usize {
+        self.info.num_channels
+    }
+
+    pub fn sample_width(&self) -> usize {
+        self.info.sample_width
     }
 }
 
@@ -150,19 +197,7 @@ impl IntoIterator for PiperWaveSamples {
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
-
-impl From<Vec<i16>> for PiperWaveSamples {
-    fn from(samples: Vec<i16>) -> Self {
-        Self(samples)
-    }
-}
-
-impl From<PiperWaveSamples> for Vec<i16> {
-    fn from(piper_wave: PiperWaveSamples) -> Self {
-        piper_wave.0
+        self.samples.into_iter()
     }
 }
 
@@ -188,7 +223,7 @@ impl PiperModel {
         &self,
         text: &str,
         synth_config: &Option<SynthesisConfig>,
-    ) -> PiperResult<PiperWaveSamples> {
+    ) -> PiperWaveResult {
         self.speak_phonemes(self.phonemize_text(&text)?.to_string(), &synth_config)
     }
 
@@ -196,7 +231,7 @@ impl PiperModel {
         &self,
         phonemes: String,
         synth_config: &Option<SynthesisConfig>,
-    ) -> PiperResult<PiperWaveSamples> {
+    ) -> PiperWaveResult {
         let mut phoneme_ids: Vec<i64> = Vec::with_capacity((phonemes.len() + 1) * 2);
         let pad = self
             .config
@@ -236,7 +271,7 @@ impl PiperModel {
         &self,
         phoneme_ids: Vec<i64>,
         synth_config: &Option<SynthesisConfig>,
-    ) -> PiperResult<PiperWaveSamples> {
+    ) -> PiperWaveResult {
         let session = match self.get_or_create_inference_session() {
             Ok(ref session) => session,
             Err(err) => {
@@ -300,7 +335,10 @@ impl PiperModel {
             .iter()
             .map(|i| (i * audio_scale).clamp(i16::MIN as f32, i16::MAX as f32) as i16)
             .collect::<Vec<i16>>();
-        Ok(samples.into())
+        Ok(PiperWaveSamples::new(
+            samples,
+            self.config.audio.sample_rate as usize,
+        ))
     }
 
     pub fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes> {
