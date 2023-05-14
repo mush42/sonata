@@ -7,6 +7,5 @@ edition = "2021"
 sonic-sys = { path = "../sonic-sys" }
 piper-model = { path = "../piper-model" }
 rayon = "1.7.0"
-crossbeam-channel = "0.5.8"
 crossbeam-deque = "0.8.3"
 once_cell = "1.17.1"
