@@ -489,6 +489,7 @@ name = "piper-synth"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
+ "crossbeam-deque",
  "once_cell",
  "piper-model",
  "rayon",

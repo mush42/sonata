@@ -66,16 +66,13 @@ impl fmt::Display for PiperError {
 
 impl From<ESpeakError> for PiperError {
     fn from(other: ESpeakError) -> Self {
-        PhonemizationError(other.0.clone())
+        PhonemizationError(other.0)
     }
 }
 
 impl From<OrtError> for PiperError {
     fn from(error: OrtError) -> Self {
-        InferenceError(format!(
-            "Failed to run onnxruntime inference: `{}`",
-            error.to_string()
-        ))
+        InferenceError(format!("Failed to run onnxruntime inference: `{}`", error))
     }
 }
 
@@ -152,7 +149,7 @@ impl PiperWaveSamples {
         Self {
             samples,
             info: PiperWaveInfo {
-                sample_rate: sample_rate,
+                sample_rate,
                 num_channels: 1,
                 sample_width: 2,
             },
@@ -168,15 +165,15 @@ impl PiperWaveSamples {
     }
 
     pub fn as_wave_bytes(&self) -> Vec<u8> {
-        self.samples
-            .iter()
-            .map(|i| i.to_le_bytes())
-            .flatten()
-            .collect()
+        self.samples.iter().flat_map(|i| i.to_le_bytes()).collect()
     }
 
     pub fn len(&self) -> usize {
         self.samples.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.samples.is_empty()
     }
 
     pub fn sample_rate(&self) -> usize {
@@ -211,8 +208,8 @@ impl PiperModel {
     pub fn new(config_path: PathBuf, onnx_path: PathBuf) -> PiperResult<Self> {
         match Self::load_model_config(&config_path) {
             Ok(config) => Ok(Self {
-                config: config,
-                onnx_path: onnx_path,
+                config,
+                onnx_path,
                 session: OnceCell::new(),
             }),
             Err(error) => Err(error),
@@ -224,7 +221,7 @@ impl PiperModel {
         text: &str,
         synth_config: &Option<SynthesisConfig>,
     ) -> PiperWaveResult {
-        self.speak_phonemes(self.phonemize_text(&text)?.to_string(), &synth_config)
+        self.speak_phonemes(self.phonemize_text(text)?.to_string(), synth_config)
     }
 
     pub fn speak_phonemes(
@@ -277,7 +274,7 @@ impl PiperModel {
             Err(err) => {
                 return Err(InferenceError(format!(
                     "Failed to initialize onnxruntime inference session: `{}`",
-                    err.to_string()
+                    err
                 )))
             }
         };
@@ -314,7 +311,7 @@ impl PiperModel {
 
         if self.config.num_speakers > 1 {
             let sid = self.config.speaker_id_map.get(&speaker).unwrap_or(&0);
-            let sid_tensor = Array1::<i64>::from_iter([sid.clone()]);
+            let sid_tensor = Array1::<i64>::from_iter([*sid]);
             input_tensors.push(InputTensor::from_array(sid_tensor.into_dyn()));
         }
 
@@ -365,7 +362,7 @@ impl PiperModel {
             Err(err) => {
                 return Err(InferenceError(format!(
                     "Failed to initialize onnxruntime inference session: `{}`",
-                    err.to_string()
+                    err
                 )))
             }
         };
@@ -379,14 +376,14 @@ impl PiperModel {
                     .iter()
                     .map(|o| o.unwrap_or(42).to_string())
                     .collect();
-                let dt = i.input_type.clone();
+                let dt = i.input_type;
                 format!("#name: {}#dims: {}#type: {:?}", name, dim.join(", "), dt)
             })
             .collect())
     }
 
     fn load_model_config(config_path: &PathBuf) -> PiperResult<ModelConfig> {
-        let file = match File::open(&config_path) {
+        let file = match File::open(config_path) {
             Ok(file) => file,
             Err(why) => {
                 return Err(FailedToLoadModelConfig(format!(

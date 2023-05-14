@@ -1,11 +1,11 @@
 mod utils;
 
+use crossbeam_deque::Worker;
 use once_cell::sync::OnceCell;
 use piper_model::{
     PiperError, PiperModel, PiperResult, PiperWaveResult, PiperWaveSamples, SynthesisConfig,
 };
 use rayon::prelude::*;
-use sonic_sys;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -25,9 +25,9 @@ pub struct AudioOutputConfig {
 impl AudioOutputConfig {
     pub fn new(rate: Option<u8>, volume: Option<u8>, pitch: Option<u8>) -> Self {
         Self {
-            rate: rate,
-            volume: volume,
-            pitch: pitch,
+            rate,
+            volume,
+            pitch,
         }
     }
 
@@ -260,7 +260,10 @@ impl Iterator for PiperSpeechStream<Batched> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.channel.is_none() {
-            self.channel = Some(SpeechSynthesisChannel::new());
+            match SpeechSynthesisChannel::new() {
+                Ok(ch) => self.channel = Some(ch),
+                Err(e) => return Some(Err(e)),
+            }
         }
         let channel: &SpeechSynthesisChannel;
         if let Some(ref ch) = self.channel {
@@ -279,78 +282,70 @@ impl Iterator for PiperSpeechStream<Batched> {
             let provider = Arc::clone(&self.provider);
             channel.put(provider, p);
         });
-        if let Some(phonemes) = sent_phoneme_iter.next() {
-            let provider = Arc::clone(&self.provider);
-            channel.put(provider, phonemes);
-        } else {
-            channel.close();
-        }
         channel.get()
     }
 }
 
-struct SpeechSynthesisTask {
-    provider: Arc<SpeechSynthesisTaskProvider>,
-    phonemes: String,
-    result: OnceCell<PiperWaveResult>,
-}
+struct SpeechSynthesisTask(Arc<OnceCell<PiperWaveResult>>);
 
 impl SpeechSynthesisTask {
-    fn new(provider: Arc<SpeechSynthesisTaskProvider>, phonemes: String) -> Self {
-        Self {
-            provider,
-            phonemes,
-            result: OnceCell::new(),
-        }
+    fn new(
+        provider: Arc<SpeechSynthesisTaskProvider>,
+        phonemes: String,
+        thread_pool: &rayon::ThreadPool,
+    ) -> Self {
+        let instance = Self(Arc::new(OnceCell::new()));
+        let result = Arc::clone(&instance.0);
+        thread_pool.spawn(move || {
+            result.set(provider.process_phonemes(phonemes)).unwrap();
+        });
+        instance
     }
-    fn generate(&mut self) {
-        self.result
-            .set(
-                self.provider
-                    .process_phonemes(std::mem::take(&mut self.phonemes)),
-            )
-            .unwrap();
+    fn get_result(self) -> PiperWaveResult {
+        self.0.wait();
+        if let Ok(c) = Arc::try_unwrap(self.0) {
+            c.into_inner().unwrap()
+        } else {
+            Err(PiperError::OperationError(
+                "Failed to obtain results".to_string(),
+            ))
+        }
     }
 }
 
 struct SpeechSynthesisChannel {
-    sender: crossbeam_channel::Sender<Option<SpeechSynthesisTask>>,
-    receiver: crossbeam_channel::Receiver<Option<SpeechSynthesisTask>>,
+    worker_queue: Worker<SpeechSynthesisTask>,
     thread_pool: rayon::ThreadPool,
 }
 
 impl SpeechSynthesisChannel {
-    fn new() -> Self {
-        let (sender, receiver) = crossbeam_channel::bounded(SPEECH_STREAM_BATCH_SIZE * 2);
-        let thread_pool = rayon::ThreadPoolBuilder::new()
+    fn new() -> PiperResult<Self> {
+        let thread_pool_builder = rayon::ThreadPoolBuilder::new()
             .num_threads(SPEECH_STREAM_NUM_WORKERS)
             .thread_name(|i| format!("piper_synth_{}", i))
-            .build()
-            .unwrap();
-        Self {
-            sender,
-            receiver,
+            .build();
+        let thread_pool = match thread_pool_builder {
+            Ok(tp) => tp,
+            Err(e) => {
+                return Err(PiperError::OperationError(format!(
+                    "Failed to build thread pool. Error: {}",
+                    e
+                )))
+            }
+        };
+        Ok(Self {
+            worker_queue: Worker::new_fifo(),
             thread_pool,
-        }
+        })
     }
     fn put(&self, provider: Arc<SpeechSynthesisTaskProvider>, phonemes: String) {
-        let mut res = SpeechSynthesisTask::new(provider, phonemes);
-        let sender = self.sender.clone();
-        self.thread_pool.spawn(move || {
-            res.generate();
-            sender.send(Some(res)).unwrap();
-        });
+        self.worker_queue.push(SpeechSynthesisTask::new(
+            provider,
+            phonemes,
+            &self.thread_pool,
+        ));
     }
     fn get(&self) -> Option<PiperWaveResult> {
-        match self.receiver.recv() {
-            Ok(res) => match res {
-                Some(wav_res) => wav_res.result.into_inner(),
-                None => None,
-            },
-            Err(_) => None,
-        }
-    }
-    fn close(&self) {
-        self.sender.send(None).unwrap();
+        self.worker_queue.pop().map(|task| task.get_result())
     }
 }

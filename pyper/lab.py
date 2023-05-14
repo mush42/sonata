@@ -12,4 +12,9 @@ p = Piper(
     r"D:\Piper_TTS_Voices\voices\voice-en-us-amy-low\en-us-amy-low.onnx"
 )
 
-ret = p.synthesize_batched("hello", "0", 40, 40, 40, 3)
+
+text = "Who are you? said the Caterpillar. Replied Alice , rather shyly, I hardly know, sir!"
+args = (text, None, None, None)
+ret = p.synthesize_batched(*args, 3)
+print(next(ret))
+

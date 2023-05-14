@@ -98,8 +98,8 @@ pub fn text_to_phonemes(
         )));
     }
     let calculated_phoneme_mode = match phoneme_separator {
-        Some(c) => ((c as u32) << 8u32) | espeakng::espeakINITIALIZE_PHONEME_IPA as u32,
-        None => espeakng::espeakINITIALIZE_PHONEME_IPA as u32,
+        Some(c) => ((c as u32) << 8u32) | espeakng::espeakINITIALIZE_PHONEME_IPA,
+        None => espeakng::espeakINITIALIZE_PHONEME_IPA,
     };
     let phoneme_mode: i32 = calculated_phoneme_mode.try_into().unwrap();
     let mut sent_phonemes = Vec::new();
