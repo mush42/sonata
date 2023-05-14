@@ -12,8 +12,7 @@ use std::sync::Arc;
 const RATE_RANGE: (f32, f32) = (0.0f32, 5.0f32);
 const VOLUME_RANGE: (f32, f32) = (0.1f32, 1.9f32);
 const PITCH_RANGE: (f32, f32) = (0.5f32, 1.5f32);
-
-const SPEECH_STREAM_NUM_WORKERS: usize = 4;
+/// Batch size when using batched synthesis mode
 const SPEECH_STREAM_BATCH_SIZE: usize = 4;
 
 pub struct AudioOutputConfig {
@@ -260,7 +259,7 @@ impl Iterator for PiperSpeechStream<Batched> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.channel.is_none() {
-            match SpeechSynthesisChannel::new() {
+            match SpeechSynthesisChannel::new(self.batch_size) {
                 Ok(ch) => self.channel = Some(ch),
                 Err(e) => return Some(Err(e)),
             }
@@ -296,15 +295,15 @@ impl SpeechSynthesisTask {
     ) -> Self {
         let instance = Self(Arc::new(OnceCell::new()));
         let result = Arc::clone(&instance.0);
-        thread_pool.spawn(move || {
+        thread_pool.spawn_fifo(move || {
             result.set(provider.process_phonemes(phonemes)).unwrap();
         });
         instance
     }
     fn get_result(self) -> PiperWaveResult {
         self.0.wait();
-        if let Ok(c) = Arc::try_unwrap(self.0) {
-            c.into_inner().unwrap()
+        if let Ok(result) = Arc::try_unwrap(self.0) {
+            result.into_inner().unwrap()
         } else {
             Err(PiperError::OperationError(
                 "Failed to obtain results".to_string(),
@@ -319,9 +318,9 @@ struct SpeechSynthesisChannel {
 }
 
 impl SpeechSynthesisChannel {
-    fn new() -> PiperResult<Self> {
+    fn new(batch_size: usize) -> PiperResult<Self> {
         let thread_pool_builder = rayon::ThreadPoolBuilder::new()
-            .num_threads(SPEECH_STREAM_NUM_WORKERS)
+            .num_threads(batch_size)
             .thread_name(|i| format!("piper_synth_{}", i))
             .build();
         let thread_pool = match thread_pool_builder {
