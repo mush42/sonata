@@ -44,6 +44,14 @@ impl WaveSamples {
     fn sample_width(&self) -> usize {
         self.0.sample_width()
     }
+    #[getter]
+    fn duration_ms(&self) -> f32 {
+        self.0.duration_ms()
+    }
+    #[getter]
+    fn real_time_factor(&self) -> Option<f32> {
+        self.0.real_time_factor()
+    }
 }
 
 #[pyclass(weakref, module = "piper")]

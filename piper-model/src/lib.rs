@@ -136,6 +136,7 @@ pub struct PiperWaveInfo {
     pub sample_rate: usize,
     pub num_channels: usize,
     pub sample_width: usize,
+    pub inference_seconds: Option<f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -145,11 +146,12 @@ pub struct PiperWaveSamples {
 }
 
 impl PiperWaveSamples {
-    pub fn new(samples: Vec<i16>, sample_rate: usize) -> Self {
+    pub fn new(samples: Vec<i16>, sample_rate: usize, inference_seconds: Option<f32>) -> Self {
         Self {
             samples,
             info: PiperWaveInfo {
                 sample_rate,
+                inference_seconds,
                 num_channels: 1,
                 sample_width: 2,
             },
@@ -186,6 +188,21 @@ impl PiperWaveSamples {
 
     pub fn sample_width(&self) -> usize {
         self.info.sample_width
+    }
+
+    pub fn duration_ms(&self) -> f32 {
+        (self.len() as f32 / self.sample_rate() as f32) * 1000.0f32
+    }
+
+    pub fn real_time_factor(&self) -> Option<f32> {
+         let Some(infer_secs) = self.info.inference_seconds else {
+             return None
+         };
+         let audio_duration = self.duration_ms();
+         if audio_duration == 0.0 {
+             return Some(0.0f32);
+         }
+        Some(infer_secs / audio_duration)
     }
 }
 
@@ -315,8 +332,11 @@ impl PiperModel {
             input_tensors.push(InputTensor::from_array(sid_tensor.into_dyn()));
         }
 
+        let timer = std::time::Instant::now();
         let outputs: Vec<DynOrtTensor<ndarray::Dim<ndarray::IxDynImpl>>> =
             session.run(input_tensors)?;
+        let inference_secs = timer.elapsed().as_millis() as f32;
+
         let outputs: OrtOwnedTensor<f32, _> = outputs[0].try_extract()?;
         let audio_output = outputs.view();
 
@@ -335,6 +355,7 @@ impl PiperModel {
         Ok(PiperWaveSamples::new(
             samples,
             self.config.audio.sample_rate as usize,
+            Some(inference_secs)
         ))
     }
 
