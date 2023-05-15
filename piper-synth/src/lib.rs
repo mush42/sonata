@@ -1,11 +1,11 @@
 mod utils;
 
-use crossbeam_deque::Worker;
 use once_cell::sync::OnceCell;
 use piper_model::{
     PiperError, PiperModel, PiperResult, PiperWaveResult, PiperWaveSamples, SynthesisConfig,
 };
 use rayon::prelude::*;
+use std::collections::vec_deque::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -264,8 +264,8 @@ impl Iterator for PiperSpeechStream<Batched> {
                 Err(e) => return Some(Err(e)),
             }
         }
-        let channel: &SpeechSynthesisChannel;
-        if let Some(ref ch) = self.channel {
+        let channel: &mut SpeechSynthesisChannel;
+        if let Some(ref mut ch) = self.channel {
             channel = ch;
         } else {
             return None;
@@ -313,7 +313,7 @@ impl SpeechSynthesisTask {
 }
 
 struct SpeechSynthesisChannel {
-    worker_queue: Worker<SpeechSynthesisTask>,
+    worker_queue: VecDeque<SpeechSynthesisTask>,
     thread_pool: rayon::ThreadPool,
 }
 
@@ -333,18 +333,18 @@ impl SpeechSynthesisChannel {
             }
         };
         Ok(Self {
-            worker_queue: Worker::new_fifo(),
+            worker_queue: VecDeque::with_capacity(batch_size * 2),
             thread_pool,
         })
     }
-    fn put(&self, provider: Arc<SpeechSynthesisTaskProvider>, phonemes: String) {
-        self.worker_queue.push(SpeechSynthesisTask::new(
+    fn put(&mut self, provider: Arc<SpeechSynthesisTaskProvider>, phonemes: String) {
+        self.worker_queue.push_back(SpeechSynthesisTask::new(
             provider,
             phonemes,
             &self.thread_pool,
         ));
     }
-    fn get(&self) -> Option<PiperWaveResult> {
-        self.worker_queue.pop().map(|task| task.get_result())
+    fn get(&mut self) -> Option<PiperWaveResult> {
+        self.worker_queue.pop_front().map(|task| task.get_result())
     }
 }
