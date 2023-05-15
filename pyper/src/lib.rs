@@ -24,6 +24,64 @@ impl From<PiperError> for PiperException {
 }
 
 #[pyclass(weakref, module = "piper", frozen)]
+#[pyo3(name = "SynthConfig")]
+#[derive(Clone)]
+struct PySynthConfig(SynthesisConfig);
+
+#[pymethods]
+impl PySynthConfig {
+    #[new]
+    fn new(
+        speaker: Option<String>,
+        noise_scale: Option<f32>,
+        length_scale: Option<f32>,
+        noise_w: Option<f32>,
+    ) -> Self {
+        Self(SynthesisConfig {
+            speaker,
+            noise_scale,
+            length_scale,
+            noise_w,
+        })
+    }
+}
+
+impl From<PySynthConfig> for SynthesisConfig {
+    fn from(other: PySynthConfig) -> Self {
+        other.0
+    }
+}
+
+#[pyclass(weakref, module = "piper", frozen)]
+#[pyo3(name = "AudioOutputConfig")]
+#[derive(Clone)]
+struct PyAudioOutputConfig(AudioOutputConfig);
+
+#[pymethods]
+impl PyAudioOutputConfig {
+    #[new]
+    fn new(
+        rate: Option<u8>,
+        volume: Option<u8>,
+        pitch: Option<u8>,
+        appended_silence_ms: Option<u32>,
+    ) -> Self {
+        Self(AudioOutputConfig {
+            rate,
+            volume,
+            pitch,
+            appended_silence_ms,
+        })
+    }
+}
+
+impl From<PyAudioOutputConfig> for AudioOutputConfig {
+    fn from(other: PyAudioOutputConfig) -> Self {
+        other.0
+    }
+}
+
+#[pyclass(weakref, module = "piper", frozen)]
 struct WaveSamples(PiperWaveSamples);
 
 #[pymethods]
@@ -167,30 +225,24 @@ impl Piper {
     fn synthesize(
         &self,
         text: String,
-        speaker: Option<String>,
-        rate: Option<u8>,
-        volume: Option<u8>,
-        pitch: Option<u8>,
-        appended_silence_ms: Option<u32>
+        synth_config: Option<PySynthConfig>,
+        audio_output_config: Option<PyAudioOutputConfig>,
     ) -> PyPiperResult<LazySpeechStream> {
-        self.synthesize_lazy(text, speaker, rate, volume, pitch, appended_silence_ms)
+        self.synthesize_lazy(text, synth_config, audio_output_config)
     }
 
     fn synthesize_lazy(
         &self,
         text: String,
-        speaker: Option<String>,
-        rate: Option<u8>,
-        volume: Option<u8>,
-        pitch: Option<u8>,
-        appended_silence_ms: Option<u32>
+        synth_config: Option<PySynthConfig>,
+        audio_output_config: Option<PyAudioOutputConfig>,
     ) -> PyPiperResult<LazySpeechStream> {
         Ok(self
             .0
             .synthesize_lazy(
                 text,
-                Some(SynthesisConfig::new(None, None, None, speaker)),
-                Some(AudioOutputConfig::new(rate, volume, pitch, appended_silence_ms)),
+                synth_config.map(|s| s.into()),
+                audio_output_config.map(|o| o.into()),
             )?
             .into())
     }
@@ -198,18 +250,15 @@ impl Piper {
     fn synthesize_parallel(
         &self,
         text: String,
-        speaker: Option<String>,
-        rate: Option<u8>,
-        volume: Option<u8>,
-        pitch: Option<u8>,
-        appended_silence_ms: Option<u32>
+        synth_config: Option<PySynthConfig>,
+        audio_output_config: Option<PyAudioOutputConfig>,
     ) -> PyPiperResult<ParallelSpeechStream> {
         Ok(self
             .0
             .synthesize_parallel(
                 text,
-                Some(SynthesisConfig::new(None, None, None, speaker)),
-                Some(AudioOutputConfig::new(rate, volume, pitch, appended_silence_ms)),
+                synth_config.map(|s| s.into()),
+                audio_output_config.map(|o| o.into()),
             )?
             .into())
     }
@@ -217,19 +266,16 @@ impl Piper {
     fn synthesize_batched(
         &self,
         text: String,
-        speaker: Option<String>,
-        rate: Option<u8>,
-        volume: Option<u8>,
-        pitch: Option<u8>,
-        appended_silence_ms: Option<u32>,
+        synth_config: Option<PySynthConfig>,
+        audio_output_config: Option<PyAudioOutputConfig>,
         batch_size: Option<usize>,
     ) -> PyPiperResult<BatchedSpeechStream> {
         Ok(self
             .0
             .synthesize_batched(
                 text,
-                Some(SynthesisConfig::new(None, None, None, speaker)),
-                Some(AudioOutputConfig::new(rate, volume, pitch, appended_silence_ms)),
+                synth_config.map(|s| s.into()),
+                audio_output_config.map(|o| o.into()),
                 batch_size,
             )?
             .into())
@@ -239,6 +285,8 @@ impl Piper {
 /// A fast, local neural text-to-speech system
 #[pymodule]
 fn pyper(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_class::<PySynthConfig>()?;
+    m.add_class::<PyAudioOutputConfig>()?;
     m.add_class::<WaveSamples>()?;
     m.add_class::<LazySpeechStream>()?;
     m.add_class::<ParallelSpeechStream>()?;

@@ -115,22 +115,6 @@ pub struct SynthesisConfig {
     pub speaker: Option<String>,
 }
 
-impl SynthesisConfig {
-    pub fn new(
-        noise_scale: Option<f32>,
-        length_scale: Option<f32>,
-        noise_w: Option<f32>,
-        speaker: Option<String>,
-    ) -> Self {
-        Self {
-            noise_scale,
-            length_scale,
-            noise_w,
-            speaker,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct PiperWaveInfo {
     pub sample_rate: usize,
@@ -195,13 +179,13 @@ impl PiperWaveSamples {
     }
 
     pub fn real_time_factor(&self) -> Option<f32> {
-         let Some(infer_secs) = self.info.inference_seconds else {
+        let Some(infer_secs) = self.info.inference_seconds else {
              return None
          };
-         let audio_duration = self.duration_ms();
-         if audio_duration == 0.0 {
-             return Some(0.0f32);
-         }
+        let audio_duration = self.duration_ms();
+        if audio_duration == 0.0 {
+            return Some(0.0f32);
+        }
         Some(infer_secs / audio_duration)
     }
 }
@@ -355,7 +339,7 @@ impl PiperModel {
         Ok(PiperWaveSamples::new(
             samples,
             self.config.audio.sample_rate as usize,
-            Some(inference_secs)
+            Some(inference_secs),
         ))
     }
 

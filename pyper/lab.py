@@ -1,5 +1,5 @@
 import os
-from pyper import Piper
+from pyper import Piper, SynthConfig, AudioOutputConfig
 
 
 
@@ -14,7 +14,11 @@ p = Piper(
 
 
 text = "Who are you? said the Caterpillar. Replied Alice , rather shyly, I hardly know, sir!"
-args = (text, None, None, None, None, 2000, 2)
-ret = p.synthesize_batched(*args)
+ret = p.synthesize_batched(
+    text,
+    None,
+    AudioOutputConfig(rate=100, volume=100, pitch=100, appended_silence_ms=2000),
+    3
+)
 for r in ret:
-    print(r.duration_ms)
+    print(r.real_time_factor)

@@ -15,23 +15,15 @@ const PITCH_RANGE: (f32, f32) = (0.5f32, 1.5f32);
 /// Batch size when using batched synthesis mode
 const SPEECH_STREAM_BATCH_SIZE: usize = 4;
 
+#[derive(Clone)]
 pub struct AudioOutputConfig {
-    rate: Option<u8>,
-    volume: Option<u8>,
-    pitch: Option<u8>,
-    appended_silence_ms: Option<u32>,
+    pub rate: Option<u8>,
+    pub volume: Option<u8>,
+    pub pitch: Option<u8>,
+    pub appended_silence_ms: Option<u32>,
 }
 
 impl AudioOutputConfig {
-    pub fn new(rate: Option<u8>, volume: Option<u8>, pitch: Option<u8>, appended_silence_ms: Option<u32>) -> Self {
-        Self {
-            rate,
-            volume,
-            pitch,
-            appended_silence_ms,
-        }
-    }
-
     fn apply(&self, audio: PiperWaveSamples) -> PiperWaveResult {
         let input_len = audio.len();
         if input_len == 0 {
@@ -179,9 +171,7 @@ impl SpeechSynthesisTaskProvider {
     fn process_phonemes(&self, phonemes: String) -> PiperWaveResult {
         let audio = self.model.speak_phonemes(phonemes, &self.synth_config)?;
         match self.output_config {
-            Some(ref config) => {
-                Ok(config.apply(audio)?)
-            }
+            Some(ref config) => Ok(config.apply(audio)?),
             None => Ok(audio),
         }
     }
