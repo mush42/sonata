@@ -19,19 +19,17 @@ pub struct AudioOutputConfig {
     rate: Option<u8>,
     volume: Option<u8>,
     pitch: Option<u8>,
+    appended_silence_ms: Option<u32>,
 }
 
 impl AudioOutputConfig {
-    pub fn new(rate: Option<u8>, volume: Option<u8>, pitch: Option<u8>) -> Self {
+    pub fn new(rate: Option<u8>, volume: Option<u8>, pitch: Option<u8>, appended_silence_ms: Option<u32>) -> Self {
         Self {
             rate,
             volume,
             pitch,
+            appended_silence_ms,
         }
-    }
-
-    fn has_any_option_set(&self) -> bool {
-        self.rate.is_some() || self.volume.is_some() || self.pitch.is_some()
     }
 
     fn apply(&self, audio: PiperWaveSamples) -> PiperWaveResult {
@@ -79,6 +77,10 @@ impl AudioOutputConfig {
             sonic_sys::sonicDestroyStream(stream);
             out_buf.set_len(num_samples as usize);
         }
+        if let Some(time_ms) = self.appended_silence_ms {
+            let num_samples = (time_ms * info.sample_rate as u32) / 1000u32;
+            out_buf.append(&mut vec![0i16; num_samples as usize]);
+        };
         Ok(PiperWaveSamples::from_raw(out_buf, info))
     }
 }
@@ -138,9 +140,13 @@ impl PiperSpeechSynthesizer {
         output_config: Option<AudioOutputConfig>,
         batch_size: Option<usize>,
     ) -> PiperResult<PiperSpeechStream<Batched>> {
+        let mut batch_size = batch_size.unwrap_or(SPEECH_STREAM_BATCH_SIZE);
+        if batch_size == 0 {
+            batch_size = SPEECH_STREAM_BATCH_SIZE;
+        }
         PiperSpeechStream::<Batched>::new_batched(
             self.create_synthesis_task_provider(text, synth_config, output_config),
-            batch_size.unwrap_or(SPEECH_STREAM_BATCH_SIZE),
+            batch_size,
         )
     }
 
@@ -174,9 +180,6 @@ impl SpeechSynthesisTaskProvider {
         let audio = self.model.speak_phonemes(phonemes, &self.synth_config)?;
         match self.output_config {
             Some(ref config) => {
-                if !config.has_any_option_set() {
-                    return Ok(audio);
-                }
                 Ok(config.apply(audio)?)
             }
             None => Ok(audio),

@@ -171,8 +171,9 @@ impl Piper {
         rate: Option<u8>,
         volume: Option<u8>,
         pitch: Option<u8>,
+        appended_silence_ms: Option<u32>
     ) -> PyPiperResult<LazySpeechStream> {
-        self.synthesize_lazy(text, speaker, rate, volume, pitch)
+        self.synthesize_lazy(text, speaker, rate, volume, pitch, appended_silence_ms)
     }
 
     fn synthesize_lazy(
@@ -182,13 +183,14 @@ impl Piper {
         rate: Option<u8>,
         volume: Option<u8>,
         pitch: Option<u8>,
+        appended_silence_ms: Option<u32>
     ) -> PyPiperResult<LazySpeechStream> {
         Ok(self
             .0
             .synthesize_lazy(
                 text,
                 Some(SynthesisConfig::new(None, None, None, speaker)),
-                Some(AudioOutputConfig::new(rate, volume, pitch)),
+                Some(AudioOutputConfig::new(rate, volume, pitch, appended_silence_ms)),
             )?
             .into())
     }
@@ -200,13 +202,14 @@ impl Piper {
         rate: Option<u8>,
         volume: Option<u8>,
         pitch: Option<u8>,
+        appended_silence_ms: Option<u32>
     ) -> PyPiperResult<ParallelSpeechStream> {
         Ok(self
             .0
             .synthesize_parallel(
                 text,
                 Some(SynthesisConfig::new(None, None, None, speaker)),
-                Some(AudioOutputConfig::new(rate, volume, pitch)),
+                Some(AudioOutputConfig::new(rate, volume, pitch, appended_silence_ms)),
             )?
             .into())
     }
@@ -218,6 +221,7 @@ impl Piper {
         rate: Option<u8>,
         volume: Option<u8>,
         pitch: Option<u8>,
+        appended_silence_ms: Option<u32>,
         batch_size: Option<usize>,
     ) -> PyPiperResult<BatchedSpeechStream> {
         Ok(self
@@ -225,7 +229,7 @@ impl Piper {
             .synthesize_batched(
                 text,
                 Some(SynthesisConfig::new(None, None, None, speaker)),
-                Some(AudioOutputConfig::new(rate, volume, pitch)),
+                Some(AudioOutputConfig::new(rate, volume, pitch, appended_silence_ms)),
                 batch_size,
             )?
             .into())

@@ -14,7 +14,7 @@ p = Piper(
 
 
 text = "Who are you? said the Caterpillar. Replied Alice , rather shyly, I hardly know, sir!"
-args = (text, None, None, None)
-ret = p.synthesize_batched(*args, 3)
+args = (text, None, None, None, None, 2000, 2)
+ret = p.synthesize_batched(*args)
 for r in ret:
-    print(r.real_time_factor)
+    print(r.duration_ms)
