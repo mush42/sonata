@@ -5,6 +5,7 @@ use piper_model::{
     PiperError, PiperModel, PiperResult, PiperWaveResult, PiperWaveSamples, SynthesisConfig,
 };
 use rayon::prelude::*;
+use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::collections::vec_deque::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -77,12 +78,18 @@ impl AudioOutputConfig {
     }
 }
 
-pub struct PiperSpeechSynthesizer(Arc<PiperModel>);
+pub struct PiperSpeechSynthesizer {
+    model: Arc<PiperModel>,
+    thread_pool: OnceCell<Arc<ThreadPool>>,
+}
 
 impl PiperSpeechSynthesizer {
     pub fn new(config_path: PathBuf, onnx_path: PathBuf) -> PiperResult<Self> {
         let model = PiperModel::new(config_path, onnx_path)?;
-        Ok(Self(Arc::new(model)))
+        Ok(Self {
+            model: Arc::new(model),
+            thread_pool: OnceCell::new(),
+        })
     }
 
     fn create_synthesis_task_provider(
@@ -92,11 +99,21 @@ impl PiperSpeechSynthesizer {
         output_config: Option<AudioOutputConfig>,
     ) -> SpeechSynthesisTaskProvider {
         SpeechSynthesisTaskProvider {
-            model: Arc::clone(&self.0),
+            model: Arc::clone(&self.model),
             text,
             synth_config,
             output_config,
         }
+    }
+
+    fn get_or_create_thread_pool(&self) -> Arc<ThreadPool> {
+        Arc::clone(self.thread_pool.get_or_init(|| {
+            let thread_pool = ThreadPoolBuilder::new()
+                .thread_name(|i| format!("piper_synth_{}", i))
+                .build()
+                .unwrap();
+            Arc::new(thread_pool)
+        }))
     }
 
     pub fn synthesize_lazy(
@@ -104,8 +121,8 @@ impl PiperSpeechSynthesizer {
         text: String,
         synth_config: Option<SynthesisConfig>,
         output_config: Option<AudioOutputConfig>,
-    ) -> PiperResult<PiperSpeechStream<Lazy>> {
-        PiperSpeechStream::<Lazy>::new(self.create_synthesis_task_provider(
+    ) -> PiperResult<PiperSpeechStreamLazy> {
+        PiperSpeechStreamLazy::new(self.create_synthesis_task_provider(
             text,
             synth_config,
             output_config,
@@ -117,8 +134,8 @@ impl PiperSpeechSynthesizer {
         text: String,
         synth_config: Option<SynthesisConfig>,
         output_config: Option<AudioOutputConfig>,
-    ) -> PiperResult<PiperSpeechStream<Parallel>> {
-        PiperSpeechStream::<Parallel>::new(self.create_synthesis_task_provider(
+    ) -> PiperResult<PiperSpeechStreamParallel> {
+        PiperSpeechStreamParallel::new(self.create_synthesis_task_provider(
             text,
             synth_config,
             output_config,
@@ -131,34 +148,26 @@ impl PiperSpeechSynthesizer {
         synth_config: Option<SynthesisConfig>,
         output_config: Option<AudioOutputConfig>,
         batch_size: Option<usize>,
-    ) -> PiperResult<PiperSpeechStream<Batched>> {
+    ) -> PiperResult<PiperSpeechStreamBatched> {
         let mut batch_size = batch_size.unwrap_or(SPEECH_STREAM_BATCH_SIZE);
         if batch_size == 0 {
             batch_size = SPEECH_STREAM_BATCH_SIZE;
         }
-        PiperSpeechStream::<Batched>::new_batched(
+        let thread_pool = self.get_or_create_thread_pool();
+        PiperSpeechStreamBatched::new(
             self.create_synthesis_task_provider(text, synth_config, output_config),
+            thread_pool,
             batch_size,
         )
     }
 
     pub fn info(&self) -> PiperResult<Vec<String>> {
-        self.0.info()
+        self.model.info()
     }
 }
 
-/// The following marker types represent how the speech stream generate it's results
-/// assuming that it takes t_i to speak each sentence
-/// Lazy: takes sum(t_i) to speak the whole text
-pub struct Lazy;
-/// Parallel: takes utmost max(t_i) to speak the whole text
-pub struct Parallel;
-/// Batched: takes at least  max(t_i) to speak the whole text
-/// there is a good chance that the next sentence's speech whill be ready when requested
-pub struct Batched;
-
 struct SpeechSynthesisTaskProvider {
-    pub model: Arc<PiperModel>,
+    model: Arc<PiperModel>,
     text: String,
     synth_config: Option<SynthesisConfig>,
     output_config: Option<AudioOutputConfig>,
@@ -177,104 +186,95 @@ impl SpeechSynthesisTaskProvider {
     }
 }
 
-pub struct PiperSpeechStream<Mode> {
-    provider: Arc<SpeechSynthesisTaskProvider>,
-    sentence_phonemes: Option<std::vec::IntoIter<String>>,
-    precalculated_results: Option<std::vec::IntoIter<PiperWaveResult>>,
-    channel: Option<SpeechSynthesisChannel>,
-    batch_size: usize,
-    mode: std::marker::PhantomData<Mode>,
+pub struct PiperSpeechStreamLazy {
+    provider: SpeechSynthesisTaskProvider,
+    sentence_phonemes: std::vec::IntoIter<String>,
 }
 
-impl<Mode> PiperSpeechStream<Mode> {
+impl PiperSpeechStreamLazy {
     fn new(provider: SpeechSynthesisTaskProvider) -> PiperResult<Self> {
+        let sentence_phonemes = provider.get_phonemes()?.into_iter();
         Ok(Self {
-            provider: Arc::new(provider),
-            sentence_phonemes: None,
-            precalculated_results: None,
-            channel: None,
-            batch_size: 0,
-            mode: std::marker::PhantomData,
+            provider,
+            sentence_phonemes,
         })
     }
 }
 
-impl PiperSpeechStream<Batched> {
-    fn new_batched(provider: SpeechSynthesisTaskProvider, batch_size: usize) -> PiperResult<Self> {
-        let mut instance = Self::new(provider)?;
-        instance.batch_size = batch_size;
+impl Iterator for PiperSpeechStreamLazy {
+    type Item = PiperWaveResult;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.sentence_phonemes
+            .next()
+            .map(|p| self.provider.process_phonemes(p))
+    }
+}
+
+pub struct PiperSpeechStreamParallel {
+    precalculated_results: std::vec::IntoIter<PiperWaveResult>,
+}
+
+impl PiperSpeechStreamParallel {
+    fn new(provider: SpeechSynthesisTaskProvider) -> PiperResult<Self> {
+        let calculated_result: Vec<PiperWaveResult> = provider
+            .get_phonemes()?
+            .par_iter()
+            .map(|ph| provider.process_phonemes(ph.to_string()))
+            .collect();
+        Ok(Self {
+            precalculated_results: calculated_result.into_iter(),
+        })
+    }
+}
+
+impl Iterator for PiperSpeechStreamParallel {
+    type Item = PiperWaveResult;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.precalculated_results.next()
+    }
+}
+
+pub struct PiperSpeechStreamBatched {
+    provider: Arc<SpeechSynthesisTaskProvider>,
+    sentence_phonemes: std::vec::IntoIter<String>,
+    channel: SpeechSynthesisChannel,
+    batch_size: usize,
+}
+
+impl PiperSpeechStreamBatched {
+    fn new(
+        provider: SpeechSynthesisTaskProvider,
+        thread_pool: Arc<ThreadPool>,
+        batch_size: usize,
+    ) -> PiperResult<Self> {
+        let sentence_phonemes = provider.get_phonemes()?.into_iter();
+        let mut instance = Self {
+            provider: Arc::new(provider),
+            sentence_phonemes,
+            channel: SpeechSynthesisChannel::new(thread_pool, batch_size)?,
+            batch_size,
+        };
+        instance.send_batch();
         Ok(instance)
     }
-}
-
-impl Iterator for PiperSpeechStream<Lazy> {
-    type Item = PiperWaveResult;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let sent_phoneme_iter = match self.sentence_phonemes {
-            Some(ref mut ph) => ph,
-            None => match self.provider.get_phonemes() {
-                Ok(ph) => self.sentence_phonemes.insert(ph.into_iter()),
-                Err(e) => return Some(Err(e)),
-            },
-        };
-        match sent_phoneme_iter.next() {
-            Some(sent_phonemes) => Some(self.provider.process_phonemes(sent_phonemes)),
-            None => None,
-        }
+    fn send_batch(&mut self) {
+        (&mut self.sentence_phonemes)
+            .take(self.batch_size)
+            .for_each(|p| {
+                let provider = Arc::clone(&self.provider);
+                self.channel.put(provider, p);
+            });
     }
 }
 
-impl Iterator for PiperSpeechStream<Parallel> {
+impl Iterator for PiperSpeechStreamBatched {
     type Item = PiperWaveResult;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.precalculated_results.is_none() {
-            let phonemes = match self.provider.get_phonemes() {
-                Ok(ph) => ph,
-                Err(e) => return Some(Err(e)),
-            };
-            let calculated_result: Vec<PiperWaveResult> = phonemes
-                .par_iter()
-                .map(|ph| self.provider.process_phonemes(ph.to_string()))
-                .collect();
-            self.precalculated_results = Some(calculated_result.into_iter());
-        }
-        match self.precalculated_results {
-            Some(ref mut res_iter) => res_iter.next(),
-            None => None,
-        }
-    }
-}
-
-impl Iterator for PiperSpeechStream<Batched> {
-    type Item = PiperWaveResult;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.channel.is_none() {
-            match SpeechSynthesisChannel::new(self.batch_size) {
-                Ok(ch) => self.channel = Some(ch),
-                Err(e) => return Some(Err(e)),
-            }
-        }
-        let channel: &mut SpeechSynthesisChannel;
-        if let Some(ref mut ch) = self.channel {
-            channel = ch;
-        } else {
-            return None;
-        }
-        let sent_phoneme_iter = match self.sentence_phonemes {
-            Some(ref mut ph) => ph,
-            None => match self.provider.get_phonemes() {
-                Ok(ph) => self.sentence_phonemes.insert(ph.into_iter()),
-                Err(e) => return Some(Err(e)),
-            },
-        };
-        sent_phoneme_iter.take(self.batch_size).for_each(|p| {
-            let provider = Arc::clone(&self.provider);
-            channel.put(provider, p);
-        });
-        channel.get()
+        self.send_batch();
+        self.channel.get()
     }
 }
 
@@ -284,7 +284,7 @@ impl SpeechSynthesisTask {
     fn new(
         provider: Arc<SpeechSynthesisTaskProvider>,
         phonemes: String,
-        thread_pool: &rayon::ThreadPool,
+        thread_pool: &ThreadPool,
     ) -> Self {
         let instance = Self(Arc::new(OnceCell::new()));
         let result = Arc::clone(&instance.0);
@@ -307,24 +307,11 @@ impl SpeechSynthesisTask {
 
 struct SpeechSynthesisChannel {
     worker_queue: VecDeque<SpeechSynthesisTask>,
-    thread_pool: rayon::ThreadPool,
+    thread_pool: Arc<ThreadPool>,
 }
 
 impl SpeechSynthesisChannel {
-    fn new(batch_size: usize) -> PiperResult<Self> {
-        let thread_pool_builder = rayon::ThreadPoolBuilder::new()
-            .num_threads(batch_size)
-            .thread_name(|i| format!("piper_synth_{}", i))
-            .build();
-        let thread_pool = match thread_pool_builder {
-            Ok(tp) => tp,
-            Err(e) => {
-                return Err(PiperError::OperationError(format!(
-                    "Failed to build thread pool. Error: {}",
-                    e
-                )))
-            }
-        };
+    fn new(thread_pool: Arc<ThreadPool>, batch_size: usize) -> PiperResult<Self> {
         Ok(Self {
             worker_queue: VecDeque::with_capacity(batch_size * 2),
             thread_pool,

@@ -1,6 +1,7 @@
 use piper_model::{PiperError, PiperWaveSamples, SynthesisConfig};
 use piper_synth::{
-    AudioOutputConfig, Batched, Lazy, Parallel, PiperSpeechStream, PiperSpeechSynthesizer,
+    AudioOutputConfig, PiperSpeechStreamBatched, PiperSpeechStreamLazy, PiperSpeechStreamParallel,
+    PiperSpeechSynthesizer,
 };
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -113,10 +114,10 @@ impl WaveSamples {
 }
 
 #[pyclass(weakref, module = "piper")]
-struct LazySpeechStream(PiperSpeechStream<Lazy>);
+struct LazySpeechStream(PiperSpeechStreamLazy);
 
-impl From<PiperSpeechStream<Lazy>> for LazySpeechStream {
-    fn from(other: PiperSpeechStream<Lazy>) -> Self {
+impl From<PiperSpeechStreamLazy> for LazySpeechStream {
+    fn from(other: PiperSpeechStreamLazy) -> Self {
         Self(other)
     }
 }
@@ -144,10 +145,10 @@ impl LazySpeechStream {
 }
 
 #[pyclass(weakref, module = "piper")]
-struct ParallelSpeechStream(PiperSpeechStream<Parallel>);
+struct ParallelSpeechStream(PiperSpeechStreamParallel);
 
-impl From<PiperSpeechStream<Parallel>> for ParallelSpeechStream {
-    fn from(other: PiperSpeechStream<Parallel>) -> Self {
+impl From<PiperSpeechStreamParallel> for ParallelSpeechStream {
+    fn from(other: PiperSpeechStreamParallel) -> Self {
         Self(other)
     }
 }
@@ -175,10 +176,10 @@ impl ParallelSpeechStream {
 }
 
 #[pyclass(weakref, module = "piper")]
-struct BatchedSpeechStream(PiperSpeechStream<Batched>);
+struct BatchedSpeechStream(PiperSpeechStreamBatched);
 
-impl From<PiperSpeechStream<Batched>> for BatchedSpeechStream {
-    fn from(other: PiperSpeechStream<Batched>) -> Self {
+impl From<PiperSpeechStreamBatched> for BatchedSpeechStream {
+    fn from(other: PiperSpeechStreamBatched) -> Self {
         Self(other)
     }
 }
