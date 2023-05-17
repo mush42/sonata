@@ -76,6 +76,15 @@ impl From<OrtError> for PiperError {
     }
 }
 
+
+impl From<wave_writer::WaveWriterError> for PiperError {
+    fn from(error: wave_writer::WaveWriterError) -> Self {
+        OperationError(error.to_string())
+    }
+}
+
+
+
 #[derive(Deserialize, Default)]
 pub struct AudioConfig {
     pub sample_rate: u32,
@@ -120,7 +129,7 @@ pub struct PiperWaveInfo {
     pub sample_rate: usize,
     pub num_channels: usize,
     pub sample_width: usize,
-    pub inference_seconds: Option<f32>,
+    pub inference_ms: Option<f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -130,12 +139,12 @@ pub struct PiperWaveSamples {
 }
 
 impl PiperWaveSamples {
-    pub fn new(samples: Vec<i16>, sample_rate: usize, inference_seconds: Option<f32>) -> Self {
+    pub fn new(samples: Vec<i16>, sample_rate: usize, inference_ms: Option<f32>) -> Self {
         Self {
             samples,
             info: PiperWaveInfo {
                 sample_rate,
-                inference_seconds,
+                inference_ms,
                 num_channels: 1,
                 sample_width: 2,
             },
@@ -178,17 +187,32 @@ impl PiperWaveSamples {
         (self.len() as f32 / self.sample_rate() as f32) * 1000.0f32
     }
 
+    pub fn inference_ms(&self) -> Option<f32> {
+        self.info.inference_ms
+    }
+
     pub fn real_time_factor(&self) -> Option<f32> {
-        let Some(infer_secs) = self.info.inference_seconds else {
+        let Some(infer_ms) = self.info.inference_ms else {
              return None
          };
         let audio_duration = self.duration_ms();
         if audio_duration == 0.0 {
             return Some(0.0f32);
         }
-        Some(infer_secs / audio_duration)
+        Some(infer_ms / audio_duration)
+    }
+
+    pub fn save_to_file(&self, filename: &str) -> PiperResult<()> {
+        Ok(wave_writer::write_wave_samples_to_file(
+            filename.into(),
+            self.samples.iter(),
+            self.sample_rate() as u32,
+            self.num_channels() as u32,
+            self.sample_width() as u32
+        )?)
     }
 }
+
 
 impl IntoIterator for PiperWaveSamples {
     type Item = i16;
@@ -319,7 +343,7 @@ impl PiperModel {
         let timer = std::time::Instant::now();
         let outputs: Vec<DynOrtTensor<ndarray::Dim<ndarray::IxDynImpl>>> =
             session.run(input_tensors)?;
-        let inference_secs = timer.elapsed().as_millis() as f32;
+        let inference_ms = timer.elapsed().as_millis() as f32;
 
         let outputs: OrtOwnedTensor<f32, _> = outputs[0].try_extract()?;
         let audio_output = outputs.view();
@@ -339,7 +363,7 @@ impl PiperModel {
         Ok(PiperWaveSamples::new(
             samples,
             self.config.audio.sample_rate as usize,
-            Some(inference_secs),
+            Some(inference_ms),
         ))
     }
 

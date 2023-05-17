@@ -91,6 +91,9 @@ impl WaveSamples {
         let bytes_vec = py.allow_threads(move || self.0.as_wave_bytes());
         PyBytes::new(py, &bytes_vec).into()
     }
+    fn save_to_file(&self, filename: &str) -> PyPiperResult<()> {
+        Ok(self.0.save_to_file(filename)?)
+    }
     #[getter]
     fn sample_rate(&self) -> usize {
         self.0.sample_rate()
@@ -102,6 +105,10 @@ impl WaveSamples {
     #[getter]
     fn sample_width(&self) -> usize {
         self.0.sample_width()
+    }
+    #[getter]
+    fn inference_ms(&self) -> Option<f32> {
+        self.0.inference_ms()
     }
     #[getter]
     fn duration_ms(&self) -> f32 {
@@ -278,6 +285,24 @@ impl Piper {
                 synth_config.map(|s| s.into()),
                 audio_output_config.map(|o| o.into()),
                 batch_size,
+            )?
+            .into())
+    }
+
+    fn synthesize_to_file(
+        &self,
+        filename: &str,
+        text: String,
+        synth_config: Option<PySynthConfig>,
+        audio_output_config: Option<PyAudioOutputConfig>,
+    ) -> PyPiperResult<()> {
+        Ok(self
+            .0
+            .synthesize_to_file(
+                filename,
+                text,
+                synth_config.map(|s| s.into()),
+                audio_output_config.map(|o| o.into()),
             )?
             .into())
     }

@@ -14,11 +14,9 @@ p = Piper(
 
 
 text = "Who are you? said the Caterpillar. Replied Alice , rather shyly, I hardly know, sir!"
-ret = p.synthesize_batched(
+p.synthesize_to_file(
+    "output.wav",
     text,
     None,
-    AudioOutputConfig(rate=100, volume=100, pitch=100, appended_silence_ms=2000),
-    3
+    AudioOutputConfig(None, None, None, 1000),
 )
-for r in ret:
-    print(r.real_time_factor)

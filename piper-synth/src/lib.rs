@@ -161,6 +161,36 @@ impl PiperSpeechSynthesizer {
         )
     }
 
+    pub fn synthesize_to_file(
+        &self,
+        filename: &str,
+        text: String,
+        synth_config: Option<SynthesisConfig>,
+        output_config: Option<AudioOutputConfig>,
+    ) -> PiperResult<()> {
+        let wave_samples =
+            Vec::from_iter(self.synthesize_parallel(text, synth_config, output_config)?);
+        let mut samples: Vec<i16> = Vec::new();
+        for result in wave_samples.into_iter() {
+            match result {
+                Ok(ws) => {
+                    samples.append(&mut ws.into_raw().0);
+                }
+                Err(e) => return Err(e),
+            };
+        }
+        if samples.is_empty() {
+            return Err(PiperError::OperationError("No speech data to write".to_string()));
+        }
+        Ok(wave_writer::write_wave_samples_to_file(
+            filename.into(),
+            samples.iter(),
+            self.model.config.audio.sample_rate,
+            1u32,
+            2u32,
+        )?)
+    }
+
     pub fn info(&self) -> PiperResult<Vec<String>> {
         self.model.info()
     }

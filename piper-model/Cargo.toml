@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 espeak-phonemizer = { path = "../espeak-phonemizer" }
+wave-writer = { path = "../wave-writer" }
 lazy_static = "1.4.0"
 ndarray = "0.15.6"
 ndarray-stats = "0.5.1"

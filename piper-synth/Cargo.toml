@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-sonic-sys = { path = "../sonic-sys" }
 piper-model = { path = "../piper-model" }
+sonic-sys = { path = "../sonic-sys" }
+wave-writer = { path = "../wave-writer" }
 rayon = "1.7.0"
 once_cell = "1.17.1"
