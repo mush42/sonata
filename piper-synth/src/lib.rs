@@ -168,10 +168,8 @@ impl PiperSpeechSynthesizer {
         synth_config: Option<SynthesisConfig>,
         output_config: Option<AudioOutputConfig>,
     ) -> PiperResult<()> {
-        let wave_samples =
-            Vec::from_iter(self.synthesize_parallel(text, synth_config, output_config)?);
         let mut samples: Vec<i16> = Vec::new();
-        for result in wave_samples.into_iter() {
+        for result in self.synthesize_parallel(text, synth_config, output_config)? {
             match result {
                 Ok(ws) => {
                     samples.append(&mut ws.into_raw().0);
