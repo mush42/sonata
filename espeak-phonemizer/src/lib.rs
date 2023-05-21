@@ -43,7 +43,12 @@ impl Phonemes {
     pub fn to_vec(self) -> Vec<String> {
         self.0
     }
+
+    pub fn num_sentences(&self) -> usize {
+        self.0.len()
+    }
 }
+
 
 impl std::string::ToString for Phonemes {
     fn to_string(&self) -> String {
