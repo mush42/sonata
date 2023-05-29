@@ -1,7 +1,7 @@
 use espeak_phonemizer::{text_to_phonemes, ESpeakError, Phonemes};
-use lazy_static::lazy_static;
 use ndarray::{Array1, Array2};
 use ndarray_stats::QuantileExt;
+use once_cell::sync::Lazy;
 use once_cell::sync::OnceCell;
 use ort::{
     tensor::{DynOrtTensor, FromArray, InputTensor, OrtOwnedTensor},
@@ -26,15 +26,15 @@ use PiperError::{
     FailedToLoadModel, FailedToLoadModelConfig, InferenceError, OperationError, PhonemizationError,
 };
 
-lazy_static! {
-    static ref _ENVIRONMENT: Arc<ort::Environment> = Arc::new(
+static ENVIRONMENT: Lazy<Arc<ort::Environment>> = Lazy::new(|| {
+    Arc::new(
         Environment::builder()
             .with_name("piper")
             .with_execution_providers([ExecutionProvider::cpu()])
             .build()
-            .unwrap()
-    );
-}
+            .unwrap(),
+    )
+});
 
 #[derive(Debug)]
 pub enum PiperError {
@@ -76,14 +76,11 @@ impl From<OrtError> for PiperError {
     }
 }
 
-
 impl From<wave_writer::WaveWriterError> for PiperError {
     fn from(error: wave_writer::WaveWriterError) -> Self {
         OperationError(error.to_string())
     }
 }
-
-
 
 #[derive(Deserialize, Default)]
 pub struct AudioConfig {
@@ -208,11 +205,10 @@ impl PiperWaveSamples {
             self.samples.iter(),
             self.sample_rate() as u32,
             self.num_channels() as u32,
-            self.sample_width() as u32
+            self.sample_width() as u32,
         )?)
     }
 }
-
 
 impl IntoIterator for PiperWaveSamples {
     type Item = i16;
@@ -373,7 +369,7 @@ impl PiperModel {
 
     fn get_or_create_inference_session(&self) -> &PiperResult<ort::Session> {
         self.session.get_or_init(|| {
-            Ok(SessionBuilder::new(&_ENVIRONMENT)?
+            Ok(SessionBuilder::new(&ENVIRONMENT)?
                 .with_optimization_level(GraphOptimizationLevel::Disable)?
                 .with_model_from_file(&self.onnx_path)?)
             // .with_parallel_execution(true)
