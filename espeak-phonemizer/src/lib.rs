@@ -49,7 +49,6 @@ static ESPEAK_NG_INIT_RESULT: Lazy<ESpeakResult<()>> = Lazy::new(|| {
     }
 });
 
-
 #[derive(Debug, Clone)]
 pub struct ESpeakError(pub String);
 
@@ -78,20 +77,20 @@ impl Phonemes {
     }
 }
 
-
 impl std::string::ToString for Phonemes {
     fn to_string(&self) -> String {
         self.0.join(" ")
     }
 }
 
+#[inline]
 pub fn text_to_phonemes(
     text: &str,
     language: &str,
     phoneme_separator: Option<char>,
 ) -> ESpeakResult<Phonemes> {
-    if let Err(e) = ESPEAK_NG_INIT_RESULT.as_ref() {
-        return Err(e.clone());
+    if ESPEAK_NG_INIT_RESULT.is_err() {
+        return Err(ESPEAK_NG_INIT_RESULT.as_ref().unwrap_err().clone());
     }
     let set_voice_res = unsafe { espeakng::espeak_SetVoiceByName(rust_string_to_c(language)) };
     if set_voice_res != espeakng::espeak_ERROR_EE_OK {

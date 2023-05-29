@@ -178,7 +178,9 @@ impl PiperSpeechSynthesizer {
             };
         }
         if samples.is_empty() {
-            return Err(PiperError::OperationError("No speech data to write".to_string()));
+            return Err(PiperError::OperationError(
+                "No speech data to write".to_string(),
+            ));
         }
         Ok(wave_writer::write_wave_samples_to_file(
             filename.into(),
@@ -202,9 +204,11 @@ struct SpeechSynthesisTaskProvider {
 }
 
 impl SpeechSynthesisTaskProvider {
+    #[inline]
     fn get_phonemes(&self) -> PiperResult<Vec<String>> {
         Ok(self.model.phonemize_text(&self.text)?.to_vec())
     }
+    #[inline]
     fn process_phonemes(&self, phonemes: String) -> PiperWaveResult {
         let audio = self.model.speak_phonemes(phonemes, &self.synth_config)?;
         match self.output_config {
@@ -232,6 +236,7 @@ impl PiperSpeechStreamLazy {
 impl Iterator for PiperSpeechStreamLazy {
     type Item = PiperWaveResult;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         self.sentence_phonemes
             .next()
@@ -259,6 +264,7 @@ impl PiperSpeechStreamParallel {
 impl Iterator for PiperSpeechStreamParallel {
     type Item = PiperWaveResult;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         self.precalculated_results.next()
     }
@@ -300,6 +306,7 @@ impl PiperSpeechStreamBatched {
 impl Iterator for PiperSpeechStreamBatched {
     type Item = PiperWaveResult;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         self.send_batch();
         self.channel.get()
