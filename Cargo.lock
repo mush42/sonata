@@ -140,6 +140,7 @@ version = "0.1.0"
 dependencies = [
  "ffi-support",
  "fs_extra",
+ "lazy_static",
  "once_cell",
 ]
 
@@ -480,6 +481,7 @@ name = "piper-model"
 version = "0.1.0"
 dependencies = [
  "espeak-phonemizer",
+ "lazy_static",
  "ndarray",
  "ndarray-stats",
  "once_cell",

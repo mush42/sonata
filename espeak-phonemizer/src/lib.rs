@@ -1,7 +1,7 @@
 mod espeakng;
 
 use ffi_support::{rust_string_to_c, FfiStr};
-use once_cell::sync::Lazy;
+use once_cell::sync::OnceCell;
 use std::env;
 use std::error::Error;
 use std::ffi;
@@ -19,36 +19,7 @@ const CLAUSE_TYPE_SENTENCE: i32 = 0x00080000;
 /// Name of the environment variable that points to the directory that contains `espeak-ng-data` directory
 /// only needed if `espeak-ng-data` directory is not in the expected location (i.e. eSpeak-ng is not installed system wide)
 const PIPER_ESPEAKNG_DATA_DIRECTORY: &str = "PIPER_ESPEAKNG_DATA_DIRECTORY";
-
-static ESPEAK_NG_INIT_RESULT: Lazy<ESpeakResult<()>> = Lazy::new(|| {
-    let data_dir = match env::var(PIPER_ESPEAKNG_DATA_DIRECTORY) {
-        Ok(directory) => PathBuf::from(directory),
-        Err(_) => env::current_exe().unwrap().parent().unwrap().to_path_buf(),
-    };
-    let es_data_path_ptr = if data_dir.join("espeak-ng-data").exists() {
-        rust_string_to_c(data_dir.display().to_string())
-    } else {
-        std::ptr::null()
-    };
-    unsafe {
-        let es_sample_rate = espeakng::espeak_Initialize(
-            espeakng::espeak_AUDIO_OUTPUT_AUDIO_OUTPUT_RETRIEVAL,
-            0,
-            es_data_path_ptr,
-            espeakng::espeakINITIALIZE_DONT_EXIT as i32,
-        );
-        if es_sample_rate <= 0 {
-            Err(ESpeakError(format!(
-                "Failed to initialize eSpeak-ng. Try setting `{}` environment variable to the directory that contains the `espeak-ng-data` directory. Error code: `{}`",
-                PIPER_ESPEAKNG_DATA_DIRECTORY,
-                es_sample_rate
-            )))
-        } else {
-            Ok(())
-        }
-    }
-});
-
+static ESPEAKNG_INIT: OnceCell<ESpeakResult<()>> = OnceCell::new();
 
 #[derive(Debug, Clone)]
 pub struct ESpeakError(pub String);
@@ -85,14 +56,45 @@ impl std::string::ToString for Phonemes {
     }
 }
 
+pub fn initialize_espeak_ng() -> ESpeakResult<()> {
+    ESPEAKNG_INIT
+        .get_or_init(|| {
+            let data_dir = match env::var(PIPER_ESPEAKNG_DATA_DIRECTORY) {
+                Ok(directory) => PathBuf::from(directory),
+                Err(_) => env::current_exe().unwrap().parent().unwrap().to_path_buf(),
+            };
+            let es_data_path_ptr = if data_dir.join("espeak-ng-data").exists() {
+                rust_string_to_c(data_dir.display().to_string())
+            } else {
+                std::ptr::null()
+            };
+            unsafe {
+                let es_sample_rate = espeakng::espeak_Initialize(
+                    espeakng::espeak_AUDIO_OUTPUT_AUDIO_OUTPUT_RETRIEVAL,
+                    0,
+                    es_data_path_ptr,
+                    espeakng::espeakINITIALIZE_DONT_EXIT as i32,
+                );
+                if es_sample_rate <= 0 {
+                    Err(ESpeakError(format!(
+                        "Failed to initialize eSpeak-ng. Try setting `{}` environment variable to the directory that contains the `espeak-ng-data` directory. Error code: `{}`",
+                        PIPER_ESPEAKNG_DATA_DIRECTORY,
+                        es_sample_rate
+                    )))
+                } else {
+                    Ok(())
+                }
+            }
+        })
+        .clone()
+}
+
 pub fn text_to_phonemes(
     text: &str,
     language: &str,
     phoneme_separator: Option<char>,
 ) -> ESpeakResult<Phonemes> {
-    if let Err(e) = ESPEAK_NG_INIT_RESULT.as_ref() {
-        return Err(e.clone());
-    }
+    initialize_espeak_ng()?;
     let set_voice_res = unsafe { espeakng::espeak_SetVoiceByName(rust_string_to_c(language)) };
     if set_voice_res != espeakng::espeak_ERROR_EE_OK {
         return Err(ESpeakError(format!(

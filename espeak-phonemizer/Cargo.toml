@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+lazy_static = "1.4.0"
 ffi-support = "0.4.4"
 once_cell = "1.17.1"
 
