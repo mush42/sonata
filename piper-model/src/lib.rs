@@ -370,7 +370,7 @@ impl PiperModel {
     fn get_or_create_inference_session(&self) -> &PiperResult<ort::Session> {
         self.session.get_or_init(|| {
             Ok(SessionBuilder::new(&ENVIRONMENT)?
-                .with_optimization_level(GraphOptimizationLevel::Level3)?
+                .with_optimization_level(GraphOptimizationLevel::Disable)?
                 .with_model_from_file(&self.onnx_path)?)
             // .with_parallel_execution(true)
             // .unwrap()
