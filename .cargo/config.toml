@@ -1,0 +1,7 @@
+[target.x86_64-pc-windows-msvc.espeak-ng]
+rustc-link-lib = ["espeak-ng"]
+rustc-link-search = ["native=./deps/windows/espeak-ng-build/x86_64/lib/"]
+
+[target.i686-pc-windows-msvc.espeak-ng]
+rustc-link-lib = ["espeak-ng"]
+rustc-link-search = ["native=./deps/windows/espeak-ng-build/i686/lib/"]

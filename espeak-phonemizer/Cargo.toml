@@ -2,11 +2,9 @@
 name = "espeak-phonemizer"
 version = "0.1.0"
 edition = "2021"
+links = "espeak-ng"
 
 [dependencies]
 lazy_static = "1.4.0"
 ffi-support = "0.4.4"
 once_cell = "1.17.1"
-
-[build-dependencies]
-fs_extra = "1.3.0"
