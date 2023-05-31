@@ -14,7 +14,17 @@ A Rust frontend for [piper](https://github.com/rhasspy/piper).
 
 Some packages, such as `espeak-phonemizer`, include tests. Running `cargo test` from the root of the workspace will likely fail, because `cargo` does not load `config` from sub packages when ran from the workspace root.
 
-To properly run tests, `cd` to the package you want to test, and run `cargo test` from there.
+On Windows you need to add `espeak-ng.dll` to the library search path by modifying the **PATH** environment variable.
+
+For example, to add `espeak-ng.dll` to your path when building for the `x86_64-pc-windows-msvc` target, run the following command before `cargo test`:
+
+```cmd
+set PATH=%PATH%;{repo_path}\deps\windows\espeak-ng-build\i686\bin
+```
+
+Replace `repo_path` with the absolute path to the repository.
+
+Then `cd` to the package, and run `cargo test` from there.
 
 # License
 
