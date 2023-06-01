@@ -1,9 +1,8 @@
 mod utils;
 
 use once_cell::sync::OnceCell;
-use piper_model::{
-    PiperError, PiperModel, PiperResult, PiperWaveResult, PiperWaveSamples, SynthesisConfig,
-};
+use piper_model::vits::{SynthesisConfig, VitsModel};
+use piper_model::{PiperError, PiperModel, PiperResult, PiperWaveResult, PiperWaveSamples};
 use rayon::prelude::*;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::collections::vec_deque::VecDeque;
@@ -79,13 +78,13 @@ impl AudioOutputConfig {
 }
 
 pub struct PiperSpeechSynthesizer {
-    model: Arc<PiperModel>,
+    model: Arc<VitsModel>,
     thread_pool: OnceCell<Arc<ThreadPool>>,
 }
 
 impl PiperSpeechSynthesizer {
     pub fn new(config_path: PathBuf, onnx_path: PathBuf) -> PiperResult<Self> {
-        let model = PiperModel::new(config_path, onnx_path)?;
+        let model = VitsModel::new(config_path, onnx_path)?;
         Ok(Self {
             model: Arc::new(model),
             thread_pool: OnceCell::new(),
@@ -178,7 +177,9 @@ impl PiperSpeechSynthesizer {
             };
         }
         if samples.is_empty() {
-            return Err(PiperError::OperationError("No speech data to write".to_string()));
+            return Err(PiperError::OperationError(
+                "No speech data to write".to_string(),
+            ));
         }
         Ok(wave_writer::write_wave_samples_to_file(
             filename.into(),
@@ -189,13 +190,13 @@ impl PiperSpeechSynthesizer {
         )?)
     }
 
-    pub fn info(&self) -> PiperResult<Vec<String>> {
+    pub fn info(&self) -> PiperResult<String> {
         self.model.info()
     }
 }
 
 struct SpeechSynthesisTaskProvider {
-    model: Arc<PiperModel>,
+    model: Arc<VitsModel>,
     text: String,
     synth_config: Option<SynthesisConfig>,
     output_config: Option<AudioOutputConfig>,

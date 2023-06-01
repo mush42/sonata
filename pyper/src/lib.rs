@@ -1,4 +1,5 @@
-use piper_model::{PiperError, PiperWaveSamples, SynthesisConfig};
+use piper_model::vits::SynthesisConfig;
+use piper_model::{PiperError, PiperWaveSamples};
 use piper_synth::{
     AudioOutputConfig, PiperSpeechStreamBatched, PiperSpeechStreamLazy, PiperSpeechStreamParallel,
     PiperSpeechSynthesizer,
@@ -226,7 +227,7 @@ impl Piper {
         )?))
     }
 
-    fn info(&self) -> PyPiperResult<Vec<String>> {
+    fn info(&self) -> PyPiperResult<String> {
         Ok(self.0.info()?)
     }
 

@@ -418,9 +418,9 @@ checksum = "b7e5500299e16ebb147ae15a00a942af264cf3688f47923b8fc2cd5858f23ad3"
 
 [[package]]
 name = "ort"
-version = "1.14.6"
+version = "1.14.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6daef38f73f79edf2f0cbf420c779dbab67203db3e40e4f557f556dca85ef861"
+checksum = "562aedddfc14391badc2e527fd568164bd2fb108e2572cd3fe0b53ed440ec439"
 dependencies = [
  "flate2",
  "lazy_static",
@@ -474,7 +474,6 @@ name = "piper-model"
 version = "0.1.0"
 dependencies = [
  "espeak-phonemizer",
- "lazy_static",
  "ndarray",
  "ndarray-stats",
  "once_cell",
