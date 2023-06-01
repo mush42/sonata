@@ -54,6 +54,7 @@ pub struct PiperWaveInfo {
 }
 
 #[derive(Debug, Clone)]
+#[must_use]
 pub struct PiperWaveSamples {
     samples: Vec<i16>,
     info: PiperWaveInfo,

@@ -240,6 +240,7 @@ impl Iterator for PiperSpeechStreamLazy {
     }
 }
 
+#[must_use]
 pub struct PiperSpeechStreamParallel {
     precalculated_results: std::vec::IntoIter<PiperWaveResult>,
 }
@@ -265,6 +266,7 @@ impl Iterator for PiperSpeechStreamParallel {
     }
 }
 
+#[must_use]
 pub struct PiperSpeechStreamBatched {
     provider: Arc<SpeechSynthesisTaskProvider>,
     sentence_phonemes: std::vec::IntoIter<String>,
