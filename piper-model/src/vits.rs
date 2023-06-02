@@ -66,7 +66,7 @@ pub struct ModelConfig {
     phoneme_id_map: HashMap<char, Vec<i64>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SynthesisConfig {
     pub noise_scale: Option<f32>,
     pub length_scale: Option<f32>,
@@ -76,7 +76,8 @@ pub struct SynthesisConfig {
 
 
 pub struct VitsModel {
-    pub config: ModelConfig,
+    pub synth_config: SynthesisConfig,
+    config: ModelConfig,
     onnx_path: PathBuf,
     session: OnceCell<PiperResult<ort::Session>>,
 }
@@ -85,6 +86,7 @@ impl VitsModel {
     pub fn new(config_path: PathBuf, onnx_path: PathBuf) -> PiperResult<Self> {
         match Self::load_model_config(&config_path) {
             Ok(config) => Ok(Self {
+                synth_config: Default::default(),
                 config,
                 onnx_path,
                 session: OnceCell::new(),
@@ -92,11 +94,14 @@ impl VitsModel {
             Err(error) => Err(error),
         }
     }
-
+    pub fn speakers(&self) -> PiperResult<Vec<String>> {
+        let speaker_ids = Vec::from_iter(self.config.speaker_id_map.keys().map(|k| k.clone()));
+        Ok(speaker_ids)
+    }
     pub fn infer_with_values(
         &self,
         phoneme_ids: Vec<i64>,
-        synth_config: &Option<SynthesisConfig>,
+        synth_config: Option<&SynthesisConfig>,
     ) -> PiperWaveResult {
         let session = match self.get_or_create_inference_session() {
             Ok(ref session) => session,
@@ -234,12 +239,12 @@ impl VitsModel {
 }
 
 
-impl PiperModel<Option<SynthesisConfig>> for VitsModel {
+impl PiperModel for VitsModel {
 
     fn espeak_voice(&self) -> PiperResult<String> {
         Ok(self.config.espeak.voice.clone())
     }
-    fn speak_phonemes(&self, phonemes: String, synth_params: &Option<SynthesisConfig>) -> PiperWaveResult {
+    fn speak_phonemes(&self, phonemes: String) -> PiperWaveResult {
         let mut phoneme_ids: Vec<i64> = Vec::with_capacity((phonemes.len() + 1) * 2);
         let pad = self
             .config
@@ -272,10 +277,9 @@ impl PiperModel<Option<SynthesisConfig>> for VitsModel {
                 .first()
                 .unwrap(),
         );
-        self.infer_with_values(phoneme_ids, synth_params)
+        self.infer_with_values(phoneme_ids, Some(&self.synth_config))
     }
     fn info(&self) -> PiperResult<String> {
         Ok(self.get_input_output_info()?.join("\n"))
     }
-
 }

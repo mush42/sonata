@@ -146,9 +146,9 @@ impl IntoIterator for PiperWaveSamples {
 }
 
 
-pub trait PiperModel<T> {
+pub trait PiperModel {
 
-    fn speak_phonemes(&self, phonemes: String, synth_params: &T) -> PiperWaveResult;
+    fn speak_phonemes(&self, phonemes: String) -> PiperWaveResult;
     fn espeak_voice(&self) -> PiperResult<String>;
     fn info(&self) -> PiperResult<String>;
 
@@ -156,7 +156,7 @@ pub trait PiperModel<T> {
         Ok(text_to_phonemes(text, &self.espeak_voice()?, None)?)
     }
 
-    fn speak_text(&self, text: &str, synth_params: &T) -> PiperWaveResult {
-        self.speak_phonemes(self.phonemize_text(text)?.to_string(), synth_params)
+    fn speak_text(&self, text: &str) -> PiperWaveResult {
+        self.speak_phonemes(self.phonemize_text(text)?.to_string())
     }
 }

@@ -1,4 +1,4 @@
-use piper_model::vits::SynthesisConfig;
+use piper_model::vits::VitsModel;
 use piper_model::{PiperError, PiperWaveSamples};
 use piper_synth::{
     AudioOutputConfig, PiperSpeechStreamBatched, PiperSpeechStreamLazy, PiperSpeechStreamParallel,
@@ -8,6 +8,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 type PyPiperResult<T> = Result<T, PiperException>;
 
@@ -22,35 +23,6 @@ impl From<PiperException> for PyErr {
 impl From<PiperError> for PiperException {
     fn from(other: PiperError) -> Self {
         Self(other)
-    }
-}
-
-#[pyclass(weakref, module = "piper", frozen)]
-#[pyo3(name = "SynthConfig")]
-#[derive(Clone)]
-struct PySynthConfig(SynthesisConfig);
-
-#[pymethods]
-impl PySynthConfig {
-    #[new]
-    fn new(
-        speaker: Option<String>,
-        noise_scale: Option<f32>,
-        length_scale: Option<f32>,
-        noise_w: Option<f32>,
-    ) -> Self {
-        Self(SynthesisConfig {
-            speaker,
-            noise_scale,
-            length_scale,
-            noise_w,
-        })
-    }
-}
-
-impl From<PySynthConfig> for SynthesisConfig {
-    fn from(other: PySynthConfig) -> Self {
-        other.0
     }
 }
 
@@ -214,19 +186,74 @@ impl BatchedSpeechStream {
     }
 }
 
+#[pyclass(weakref, module = "piper")]
+#[pyo3(name = "VitsModel")]
+struct PyVitsModel(Arc<VitsModel>);
+
+#[pymethods]
+impl PyVitsModel {
+    #[new]
+    fn new(config_path: &str, model_path: &str) -> PyPiperResult<Self> {
+        let vits = VitsModel::new(PathBuf::from(config_path), PathBuf::from(model_path))?;
+        Ok(Self(Arc::new(vits)))
+    }
+    #[getter]
+    fn speakers(&self) -> PyPiperResult<Vec<String>> {
+        Ok(self.0.speakers()?)
+    }
+    #[getter]
+    fn get_speaker(&self) -> Option<String> {
+        self.0.synth_config.speaker.clone()
+    }
+    #[setter]
+    fn set_speaker(&mut self, value: String) {
+        if let Some(&mut ref mut vits) = Arc::get_mut(&mut self.0) {
+            vits.synth_config.speaker.replace(value);
+        }
+    }
+    #[getter]
+    fn get_noise_scale(&self) -> Option<f32> {
+        self.0.synth_config.noise_scale.clone()
+    }
+    #[setter]
+    fn set_noise_scale(&mut self, value: f32) {
+        if let Some(&mut ref mut vits) = Arc::get_mut(&mut self.0) {
+            vits.synth_config.noise_scale.replace(value);
+        }
+    }
+    #[getter]
+    fn get_length_scale(&self) -> Option<f32> {
+        self.0.synth_config.length_scale.clone()
+    }
+    #[setter]
+    fn set_length_scale(&mut self, value: f32) {
+        if let Some(&mut ref mut vits) = Arc::get_mut(&mut self.0) {
+            vits.synth_config.length_scale.replace(value);
+        }
+    }
+    #[getter]
+    fn get_noise_w(&self) -> Option<f32> {
+        self.0.synth_config.noise_w.clone()
+    }
+    #[setter]
+    fn set_noise_w(&mut self, value: f32) {
+        if let Some(&mut ref mut vits) = Arc::get_mut(&mut self.0) {
+            vits.synth_config.noise_w.replace(value);
+        }
+    }
+}
+
 #[pyclass(weakref, module = "piper", frozen)]
 struct Piper(PiperSpeechSynthesizer);
 
 #[pymethods]
 impl Piper {
-    #[new]
-    fn new(config_path: &str, model_path: &str) -> PyPiperResult<Self> {
-        Ok(Self(PiperSpeechSynthesizer::new(
-            PathBuf::from(config_path),
-            PathBuf::from(model_path),
-        )?))
+    #[staticmethod]
+    fn with_vits(vits_model: &PyVitsModel) -> PyPiperResult<Self> {
+        let model = Arc::clone(&vits_model.0);
+        let synthesizer = PiperSpeechSynthesizer::new(model)?;
+        Ok(Self(synthesizer))
     }
-
     fn info(&self) -> PyPiperResult<String> {
         Ok(self.0.info()?)
     }
@@ -234,59 +261,42 @@ impl Piper {
     fn synthesize(
         &self,
         text: String,
-        synth_config: Option<PySynthConfig>,
         audio_output_config: Option<PyAudioOutputConfig>,
     ) -> PyPiperResult<LazySpeechStream> {
-        self.synthesize_lazy(text, synth_config, audio_output_config)
+        self.synthesize_lazy(text, audio_output_config)
     }
 
     fn synthesize_lazy(
         &self,
         text: String,
-        synth_config: Option<PySynthConfig>,
         audio_output_config: Option<PyAudioOutputConfig>,
     ) -> PyPiperResult<LazySpeechStream> {
         Ok(self
             .0
-            .synthesize_lazy(
-                text,
-                synth_config.map(|s| s.into()),
-                audio_output_config.map(|o| o.into()),
-            )?
+            .synthesize_lazy(text, audio_output_config.map(|o| o.into()))?
             .into())
     }
 
     fn synthesize_parallel(
         &self,
         text: String,
-        synth_config: Option<PySynthConfig>,
         audio_output_config: Option<PyAudioOutputConfig>,
     ) -> PyPiperResult<ParallelSpeechStream> {
         Ok(self
             .0
-            .synthesize_parallel(
-                text,
-                synth_config.map(|s| s.into()),
-                audio_output_config.map(|o| o.into()),
-            )?
+            .synthesize_parallel(text, audio_output_config.map(|o| o.into()))?
             .into())
     }
 
     fn synthesize_batched(
         &self,
         text: String,
-        synth_config: Option<PySynthConfig>,
         audio_output_config: Option<PyAudioOutputConfig>,
         batch_size: Option<usize>,
     ) -> PyPiperResult<BatchedSpeechStream> {
         Ok(self
             .0
-            .synthesize_batched(
-                text,
-                synth_config.map(|s| s.into()),
-                audio_output_config.map(|o| o.into()),
-                batch_size,
-            )?
+            .synthesize_batched(text, audio_output_config.map(|o| o.into()), batch_size)?
             .into())
     }
 
@@ -294,17 +304,11 @@ impl Piper {
         &self,
         filename: &str,
         text: String,
-        synth_config: Option<PySynthConfig>,
         audio_output_config: Option<PyAudioOutputConfig>,
     ) -> PyPiperResult<()> {
         Ok(self
             .0
-            .synthesize_to_file(
-                filename,
-                text,
-                synth_config.map(|s| s.into()),
-                audio_output_config.map(|o| o.into()),
-            )?
+            .synthesize_to_file(filename, text, audio_output_config.map(|o| o.into()))?
             .into())
     }
 }
@@ -312,7 +316,7 @@ impl Piper {
 /// A fast, local neural text-to-speech system
 #[pymodule]
 fn pyper(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_class::<PySynthConfig>()?;
+    m.add_class::<PyVitsModel>()?;
     m.add_class::<PyAudioOutputConfig>()?;
     m.add_class::<WaveSamples>()?;
     m.add_class::<LazySpeechStream>()?;

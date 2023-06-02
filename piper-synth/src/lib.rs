@@ -1,12 +1,10 @@
 mod utils;
 
 use once_cell::sync::OnceCell;
-use piper_model::vits::{SynthesisConfig, VitsModel};
 use piper_model::{PiperError, PiperModel, PiperResult, PiperWaveResult, PiperWaveSamples};
 use rayon::prelude::*;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::collections::vec_deque::VecDeque;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 const RATE_RANGE: (f32, f32) = (0.0f32, 5.0f32);
@@ -77,16 +75,18 @@ impl AudioOutputConfig {
     }
 }
 
-pub struct PiperSpeechSynthesizer {
-    model: Arc<VitsModel>,
+pub struct PiperSpeechSynthesizer
+{
+    model: Arc<dyn PiperModel + Sync + Send>,
     thread_pool: OnceCell<Arc<ThreadPool>>,
 }
 
-impl PiperSpeechSynthesizer {
-    pub fn new(config_path: PathBuf, onnx_path: PathBuf) -> PiperResult<Self> {
-        let model = VitsModel::new(config_path, onnx_path)?;
+impl PiperSpeechSynthesizer
+{
+    pub fn new(model: Arc<dyn PiperModel + Sync + Send>) -> PiperResult<Self>
+    {
         Ok(Self {
-            model: Arc::new(model),
+            model,
             thread_pool: OnceCell::new(),
         })
     }
@@ -94,13 +94,11 @@ impl PiperSpeechSynthesizer {
     fn create_synthesis_task_provider(
         &self,
         text: String,
-        synth_config: Option<SynthesisConfig>,
         output_config: Option<AudioOutputConfig>,
     ) -> SpeechSynthesisTaskProvider {
         SpeechSynthesisTaskProvider {
             model: Arc::clone(&self.model),
             text,
-            synth_config,
             output_config,
         }
     }
@@ -118,12 +116,10 @@ impl PiperSpeechSynthesizer {
     pub fn synthesize_lazy(
         &self,
         text: String,
-        synth_config: Option<SynthesisConfig>,
         output_config: Option<AudioOutputConfig>,
     ) -> PiperResult<PiperSpeechStreamLazy> {
         PiperSpeechStreamLazy::new(self.create_synthesis_task_provider(
             text,
-            synth_config,
             output_config,
         ))
     }
@@ -131,12 +127,10 @@ impl PiperSpeechSynthesizer {
     pub fn synthesize_parallel(
         &self,
         text: String,
-        synth_config: Option<SynthesisConfig>,
         output_config: Option<AudioOutputConfig>,
     ) -> PiperResult<PiperSpeechStreamParallel> {
         PiperSpeechStreamParallel::new(self.create_synthesis_task_provider(
             text,
-            synth_config,
             output_config,
         ))
     }
@@ -144,7 +138,6 @@ impl PiperSpeechSynthesizer {
     pub fn synthesize_batched(
         &self,
         text: String,
-        synth_config: Option<SynthesisConfig>,
         output_config: Option<AudioOutputConfig>,
         batch_size: Option<usize>,
     ) -> PiperResult<PiperSpeechStreamBatched> {
@@ -154,7 +147,7 @@ impl PiperSpeechSynthesizer {
         }
         let thread_pool = self.get_or_create_thread_pool();
         PiperSpeechStreamBatched::new(
-            self.create_synthesis_task_provider(text, synth_config, output_config),
+            self.create_synthesis_task_provider(text, output_config),
             thread_pool,
             batch_size,
         )
@@ -164,11 +157,10 @@ impl PiperSpeechSynthesizer {
         &self,
         filename: &str,
         text: String,
-        synth_config: Option<SynthesisConfig>,
         output_config: Option<AudioOutputConfig>,
     ) -> PiperResult<()> {
         let mut samples: Vec<i16> = Vec::new();
-        for result in self.synthesize_parallel(text, synth_config, output_config)? {
+        for result in self.synthesize_parallel(text, output_config)? {
             match result {
                 Ok(ws) => {
                     samples.append(&mut ws.into_raw().0);
@@ -184,7 +176,8 @@ impl PiperSpeechSynthesizer {
         Ok(wave_writer::write_wave_samples_to_file(
             filename.into(),
             samples.iter(),
-            self.model.config.audio.sample_rate,
+            // XXX
+            16000,
             1u32,
             2u32,
         )?)
@@ -196,9 +189,8 @@ impl PiperSpeechSynthesizer {
 }
 
 struct SpeechSynthesisTaskProvider {
-    model: Arc<VitsModel>,
+    model: Arc<dyn PiperModel + Sync + Send>,
     text: String,
-    synth_config: Option<SynthesisConfig>,
     output_config: Option<AudioOutputConfig>,
 }
 
@@ -207,7 +199,7 @@ impl SpeechSynthesisTaskProvider {
         Ok(self.model.phonemize_text(&self.text)?.to_vec())
     }
     fn process_phonemes(&self, phonemes: String) -> PiperWaveResult {
-        let audio = self.model.speak_phonemes(phonemes, &self.synth_config)?;
+        let audio = self.model.speak_phonemes(phonemes)?;
         match self.output_config {
             Some(ref config) => Ok(config.apply(audio)?),
             None => Ok(audio),

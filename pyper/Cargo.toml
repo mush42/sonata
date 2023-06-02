@@ -13,5 +13,5 @@ piper-synth = { path = "../piper-synth" }
 
 [dependencies.pyo3]
 version = "0.18.1"
-features = ["extension-module"]
+features = ["extension-module", "abi3-py37"]
 
