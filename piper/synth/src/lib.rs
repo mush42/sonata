@@ -1,7 +1,7 @@
 mod utils;
 
 use once_cell::sync::OnceCell;
-use piper_model::{PiperError, PiperModel, PiperResult, PiperWaveResult, PiperWaveSamples};
+use piper_core::{PiperError, PiperModel, PiperResult, PiperWaveResult, PiperWaveSamples};
 use rayon::prelude::*;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::collections::vec_deque::VecDeque;
@@ -22,16 +22,16 @@ pub struct AudioOutputConfig {
 }
 
 impl AudioOutputConfig {
-    fn apply(&self, audio: PiperWaveSamples) -> PiperWaveResult {
+    fn apply(&self, mut audio: PiperWaveSamples) -> PiperWaveResult {
         let input_len = audio.len();
         if input_len == 0 {
             return Ok(audio);
         }
-        let (samples, info) = audio.into_raw();
+        let samples = std::mem::take(&mut audio.samples);
         let mut out_buf: Vec<i16> = Vec::new();
         unsafe {
             let stream =
-                sonic_sys::sonicCreateStream(info.sample_rate as i32, info.num_channels as i32);
+                sonic_sys::sonicCreateStream(audio.info.sample_rate as i32, audio.info.num_channels as i32);
             if let Some(rate) = self.rate {
                 sonic_sys::sonicSetSpeed(
                     stream,
@@ -68,10 +68,11 @@ impl AudioOutputConfig {
             out_buf.set_len(num_samples as usize);
         }
         if let Some(time_ms) = self.appended_silence_ms {
-            let num_samples = (time_ms * info.sample_rate as u32) / 1000u32;
+            let num_samples = (time_ms * audio.info.sample_rate as u32) / 1000u32;
             out_buf.append(&mut vec![0i16; num_samples as usize]);
         };
-        Ok(PiperWaveSamples::from_raw(out_buf, info))
+        audio.samples = out_buf;
+        Ok(audio)
     }
 }
 
@@ -163,7 +164,7 @@ impl PiperSpeechSynthesizer
         for result in self.synthesize_parallel(text, output_config)? {
             match result {
                 Ok(ws) => {
-                    samples.append(&mut ws.into_raw().0);
+                    samples.append(&mut ws.to_vec());
                 }
                 Err(e) => return Err(e),
             };
@@ -176,8 +177,7 @@ impl PiperSpeechSynthesizer
         Ok(wave_writer::write_wave_samples_to_file(
             filename.into(),
             samples.iter(),
-            // XXX
-            16000,
+            self.model.wave_info()?.sample_rate as u32,
             1u32,
             2u32,
         )?)
@@ -198,7 +198,7 @@ impl SpeechSynthesisTaskProvider {
     fn get_phonemes(&self) -> PiperResult<Vec<String>> {
         Ok(self.model.phonemize_text(&self.text)?.to_vec())
     }
-    fn process_phonemes(&self, phonemes: String) -> PiperWaveResult {
+    fn process_phonemes(&self, phonemes: &str) -> PiperWaveResult {
         let audio = self.model.speak_phonemes(phonemes)?;
         match self.output_config {
             Some(ref config) => Ok(config.apply(audio)?),
@@ -228,7 +228,7 @@ impl Iterator for PiperSpeechStreamLazy {
     fn next(&mut self) -> Option<Self::Item> {
         self.sentence_phonemes
             .next()
-            .map(|p| self.provider.process_phonemes(p))
+            .map(|p| self.provider.process_phonemes(&p))
     }
 }
 
@@ -242,7 +242,7 @@ impl PiperSpeechStreamParallel {
         let calculated_result: Vec<PiperWaveResult> = provider
             .get_phonemes()?
             .par_iter()
-            .map(|ph| provider.process_phonemes(ph.to_string()))
+            .map(|ph| provider.process_phonemes(ph))
             .collect();
         Ok(Self {
             precalculated_results: calculated_result.into_iter(),
@@ -312,7 +312,7 @@ impl SpeechSynthesisTask {
         let instance = Self(Arc::new(OnceCell::new()));
         let result = Arc::clone(&instance.0);
         thread_pool.spawn_fifo(move || {
-            result.set(provider.process_phonemes(phonemes)).unwrap();
+            result.set(provider.process_phonemes(&phonemes)).unwrap();
         });
         instance
     }

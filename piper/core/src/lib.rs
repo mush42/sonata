@@ -1,14 +1,8 @@
-pub mod vits;
-
-use espeak_phonemizer::{text_to_phonemes, ESpeakError, Phonemes};
 use std::error::Error;
 use std::fmt;
 
 pub type PiperResult<T> = Result<T, PiperError>;
 pub type PiperWaveResult = PiperResult<PiperWaveSamples>;
-use PiperError::{
-    FailedToLoadResource, PhonemizationError, OperationError,
-};
 
 #[derive(Debug)]
 pub enum PiperError {
@@ -22,26 +16,48 @@ impl Error for PiperError {}
 impl fmt::Display for PiperError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let err_message = match self {
-            FailedToLoadResource(msg) => {
+            PiperError::FailedToLoadResource(msg) => {
                 format!("Failed to load resource from. Error `{}`", msg)
             }
-            PhonemizationError(msg) => msg.to_string(),
-            OperationError(msg) => msg.to_string(),
+            PiperError::PhonemizationError(msg) => msg.to_string(),
+            PiperError::OperationError(msg) => msg.to_string(),
         };
         write!(f, "{}", err_message)
     }
 }
 
-impl From<ESpeakError> for PiperError {
-    fn from(other: ESpeakError) -> Self {
-        PhonemizationError(other.0)
+impl From<wave_writer::WaveWriterError> for PiperError {
+    fn from(error: wave_writer::WaveWriterError) -> Self {
+        PiperError::OperationError(error.to_string())
     }
 }
 
+/// A wrapper type that holds sentence phonemes
+pub struct Phonemes(Vec<String>);
 
-impl From<wave_writer::WaveWriterError> for PiperError {
-    fn from(error: wave_writer::WaveWriterError) -> Self {
-        OperationError(error.to_string())
+impl Phonemes {
+    pub fn sentences(&self) -> &Vec<String> {
+        &self.0
+    }
+
+    pub fn to_vec(self) -> Vec<String> {
+        self.0
+    }
+
+    pub fn num_sentences(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl From<Vec<String>> for Phonemes {
+    fn from(other: Vec<String>) -> Self {
+        Self(other)
+    }
+}
+
+impl std::string::ToString for Phonemes {
+    fn to_string(&self) -> String {
+        self.0.join(" ")
     }
 }
 
@@ -50,35 +66,31 @@ pub struct PiperWaveInfo {
     pub sample_rate: usize,
     pub num_channels: usize,
     pub sample_width: usize,
-    pub inference_ms: Option<f32>,
 }
 
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct PiperWaveSamples {
-    samples: Vec<i16>,
-    info: PiperWaveInfo,
+    pub samples: Vec<i16>,
+    pub info: PiperWaveInfo,
+    pub inference_ms: Option<f32>,
 }
 
 impl PiperWaveSamples {
     pub fn new(samples: Vec<i16>, sample_rate: usize, inference_ms: Option<f32>) -> Self {
         Self {
             samples,
+            inference_ms,
             info: PiperWaveInfo {
                 sample_rate,
-                inference_ms,
                 num_channels: 1,
                 sample_width: 2,
             },
         }
     }
 
-    pub fn from_raw(samples: Vec<i16>, info: PiperWaveInfo) -> Self {
-        Self { samples, info }
-    }
-
-    pub fn into_raw(self) -> (Vec<i16>, PiperWaveInfo) {
-        (self.samples, self.info)
+    pub fn to_vec(self) -> Vec<i16> {
+        self.samples
     }
 
     pub fn as_wave_bytes(&self) -> Vec<u8> {
@@ -93,28 +105,16 @@ impl PiperWaveSamples {
         self.samples.is_empty()
     }
 
-    pub fn sample_rate(&self) -> usize {
-        self.info.sample_rate
-    }
-
-    pub fn num_channels(&self) -> usize {
-        self.info.num_channels
-    }
-
-    pub fn sample_width(&self) -> usize {
-        self.info.sample_width
-    }
-
     pub fn duration_ms(&self) -> f32 {
-        (self.len() as f32 / self.sample_rate() as f32) * 1000.0f32
+        (self.len() as f32 / self.info.sample_rate as f32) * 1000.0f32
     }
 
     pub fn inference_ms(&self) -> Option<f32> {
-        self.info.inference_ms
+        self.inference_ms
     }
 
     pub fn real_time_factor(&self) -> Option<f32> {
-        let Some(infer_ms) = self.info.inference_ms else {
+        let Some(infer_ms) = self.inference_ms else {
              return None
          };
         let audio_duration = self.duration_ms();
@@ -128,9 +128,9 @@ impl PiperWaveSamples {
         Ok(wave_writer::write_wave_samples_to_file(
             filename.into(),
             self.samples.iter(),
-            self.sample_rate() as u32,
-            self.num_channels() as u32,
-            self.sample_width() as u32
+            self.info.sample_rate as u32,
+            self.info.num_channels as u32,
+            self.info.sample_width as u32
         )?)
     }
 }
@@ -148,15 +148,9 @@ impl IntoIterator for PiperWaveSamples {
 
 pub trait PiperModel {
 
-    fn speak_phonemes(&self, phonemes: String) -> PiperWaveResult;
-    fn espeak_voice(&self) -> PiperResult<String>;
+    fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes>;
+    fn speak_phonemes(&self, phonemes: &str) -> PiperWaveResult;
+    fn wave_info(&self) -> PiperResult<PiperWaveInfo>;
     fn info(&self) -> PiperResult<String>;
 
-    fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes> {
-        Ok(text_to_phonemes(text, &self.espeak_voice()?, None)?)
-    }
-
-    fn speak_text(&self, text: &str) -> PiperWaveResult {
-        self.speak_phonemes(self.phonemize_text(text)?.to_string())
-    }
 }

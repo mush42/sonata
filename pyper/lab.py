@@ -15,7 +15,8 @@ p = Piper.with_vits(vits)
 
 
 text = "Who are you? said the Caterpillar. Replied Alice , rather shyly, I hardly know, sir!"
-p.synthesize_lazy(
+p.synthesize_to_file(
+    "output.wav",
     text,
     AudioOutputConfig(None, None, None, 1000),
 )

@@ -1,9 +1,8 @@
 [package]
-name = "espeak-phonemizer"
+name = "piper-core"
 version = "0.1.0"
 edition = "2021"
-links = "espeak-ng"
 
 [dependencies]
-ffi-support = "0.4.4"
+wave-writer = { path = "../../wave-writer" }
 once_cell = "1.17.1"

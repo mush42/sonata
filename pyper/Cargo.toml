@@ -8,8 +8,9 @@ name = "pyper"
 crate-type = ["cdylib"]
 
 [dependencies]
-piper-model = { path = "../piper-model" }
-piper-synth = { path = "../piper-synth" }
+piper-core = { path = "../piper/core" }
+piper-synth = { path = "../piper/synth" }
+piper-vits = { path = "../piper/models/vits" }
 
 [dependencies.pyo3]
 version = "0.18.1"

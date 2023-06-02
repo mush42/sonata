@@ -1,9 +1,9 @@
-use piper_model::vits::VitsModel;
-use piper_model::{PiperError, PiperWaveSamples};
+use piper_core::{PiperError, PiperWaveSamples};
 use piper_synth::{
     AudioOutputConfig, PiperSpeechStreamBatched, PiperSpeechStreamLazy, PiperSpeechStreamParallel,
     PiperSpeechSynthesizer,
 };
+use piper_vits::VitsModel;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -69,15 +69,15 @@ impl WaveSamples {
     }
     #[getter]
     fn sample_rate(&self) -> usize {
-        self.0.sample_rate()
+        self.0.info.sample_rate
     }
     #[getter]
     fn num_channels(&self) -> usize {
-        self.0.num_channels()
+        self.0.info.num_channels
     }
     #[getter]
     fn sample_width(&self) -> usize {
-        self.0.sample_width()
+        self.0.info.sample_width
     }
     #[getter]
     fn inference_ms(&self) -> Option<f32> {
@@ -212,33 +212,33 @@ impl PyVitsModel {
         }
     }
     #[getter]
-    fn get_noise_scale(&self) -> Option<f32> {
-        self.0.synth_config.noise_scale.clone()
+    fn get_noise_scale(&self) -> f32 {
+        self.0.synth_config.noise_scale
     }
     #[setter]
     fn set_noise_scale(&mut self, value: f32) {
         if let Some(&mut ref mut vits) = Arc::get_mut(&mut self.0) {
-            vits.synth_config.noise_scale.replace(value);
+            vits.synth_config.noise_scale = value;
         }
     }
     #[getter]
-    fn get_length_scale(&self) -> Option<f32> {
-        self.0.synth_config.length_scale.clone()
+    fn get_length_scale(&self) -> f32 {
+        self.0.synth_config.length_scale
     }
     #[setter]
     fn set_length_scale(&mut self, value: f32) {
         if let Some(&mut ref mut vits) = Arc::get_mut(&mut self.0) {
-            vits.synth_config.length_scale.replace(value);
+            vits.synth_config.length_scale = value;
         }
     }
     #[getter]
-    fn get_noise_w(&self) -> Option<f32> {
-        self.0.synth_config.noise_w.clone()
+    fn get_noise_w(&self) -> f32 {
+        self.0.synth_config.noise_w
     }
     #[setter]
     fn set_noise_w(&mut self, value: f32) {
         if let Some(&mut ref mut vits) = Arc::get_mut(&mut self.0) {
-            vits.synth_config.noise_w.replace(value);
+            vits.synth_config.noise_w = value;
         }
     }
 }
@@ -306,10 +306,9 @@ impl Piper {
         text: String,
         audio_output_config: Option<PyAudioOutputConfig>,
     ) -> PyPiperResult<()> {
-        Ok(self
-            .0
-            .synthesize_to_file(filename, text, audio_output_config.map(|o| o.into()))?
-            .into())
+        self.0
+            .synthesize_to_file(filename, text, audio_output_config.map(|o| o.into()))?;
+        Ok(())
     }
 }
 

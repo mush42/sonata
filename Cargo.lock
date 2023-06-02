@@ -139,7 +139,6 @@ name = "espeak-phonemizer"
 version = "0.1.0"
 dependencies = [
  "ffi-support",
- "lazy_static",
  "once_cell",
 ]
 
@@ -470,16 +469,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0a7ae3ac2f1173085d398531c705756c94a4c56843785df85a60c1a0afac116"
 
 [[package]]
-name = "piper-model"
+name = "piper-core"
 version = "0.1.0"
 dependencies = [
- "espeak-phonemizer",
- "ndarray",
- "ndarray-stats",
  "once_cell",
- "ort",
- "serde",
- "serde_json",
  "wave-writer",
 ]
 
@@ -488,10 +481,24 @@ name = "piper-synth"
 version = "0.1.0"
 dependencies = [
  "once_cell",
- "piper-model",
+ "piper-core",
  "rayon",
  "sonic-sys",
  "wave-writer",
+]
+
+[[package]]
+name = "piper-vits"
+version = "0.1.0"
+dependencies = [
+ "espeak-phonemizer",
+ "ndarray",
+ "ndarray-stats",
+ "once_cell",
+ "ort",
+ "piper-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -573,8 +580,9 @@ dependencies = [
 name = "pyper"
 version = "0.1.0"
 dependencies = [
- "piper-model",
+ "piper-core",
  "piper-synth",
+ "piper-vits",
  "pyo3",
 ]
 
