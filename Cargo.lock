@@ -494,6 +494,7 @@ dependencies = [
  "espeak-phonemizer",
  "ndarray",
  "ndarray-stats",
+ "num_cpus",
  "once_cell",
  "ort",
  "piper-core",

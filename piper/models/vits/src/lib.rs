@@ -1,6 +1,7 @@
 use espeak_phonemizer::text_to_phonemes;
 use ndarray::{Array1, Array2};
 use ndarray_stats::QuantileExt;
+use num_cpus;
 use once_cell::sync::{Lazy, OnceCell};
 use ort::{
     tensor::{DynOrtTensor, FromArray, InputTensor, OrtOwnedTensor},
@@ -20,6 +21,9 @@ const BOS: char = '^';
 const EOS: char = '$';
 const PAD: char = '_';
 
+static CPU_COUNT: Lazy<i16> = Lazy::new(|| {
+    num_cpus::get().try_into().unwrap_or(2)
+});
 static ENVIRONMENT: Lazy<Arc<ort::Environment>> = Lazy::new(|| {
     Arc::new(
         Environment::builder()
@@ -223,8 +227,8 @@ impl VitsModel {
                 .with_allocator(ort::AllocatorType::Arena)?
                 .with_memory_pattern(true)?
                 .with_parallel_execution(true)?
-                .with_inter_threads(4)?
-                .with_intra_threads(4)?
+                .with_inter_threads(*CPU_COUNT / 2)?
+                .with_intra_threads(*CPU_COUNT / 2)?
                 .with_model_from_file(&self.onnx_path)
         })
     }
