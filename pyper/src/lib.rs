@@ -202,44 +202,36 @@ impl PyVitsModel {
         Ok(self.0.speakers()?)
     }
     #[getter]
-    fn get_speaker(&self) -> Option<String> {
-        self.0.synth_config.speaker.clone()
+    fn get_speaker(&self) -> PyPiperResult<Option<String>> {
+        Ok(self.0.get_speaker()?)
     }
     #[setter]
-    fn set_speaker(&mut self, value: String) {
-        if let Some(&mut ref mut vits) = Arc::get_mut(&mut self.0) {
-            vits.synth_config.speaker.replace(value);
-        }
+    fn set_speaker(&self, name: String) -> PyPiperResult<()> {
+        Ok(self.0.set_speaker(name)?)
     }
     #[getter]
-    fn get_noise_scale(&self) -> f32 {
-        self.0.synth_config.noise_scale
+    fn get_noise_scale(&self) -> PyPiperResult<f32> {
+        Ok(self.0.get_noise_scale()?)
     }
     #[setter]
-    fn set_noise_scale(&mut self, value: f32) {
-        if let Some(&mut ref mut vits) = Arc::get_mut(&mut self.0) {
-            vits.synth_config.noise_scale = value;
-        }
+    fn set_noise_scale(&self, value: f32) -> PyPiperResult<()> {
+        Ok(self.0.set_noise_scale(value)?)
     }
     #[getter]
-    fn get_length_scale(&self) -> f32 {
-        self.0.synth_config.length_scale
+    fn get_length_scale(&self) -> PyPiperResult<f32> {
+        Ok(self.0.get_length_scale()?)
     }
     #[setter]
-    fn set_length_scale(&mut self, value: f32) {
-        if let Some(&mut ref mut vits) = Arc::get_mut(&mut self.0) {
-            vits.synth_config.length_scale = value;
-        }
+    fn set_length_scale(&self, value: f32) -> PyPiperResult<()> {
+        Ok(self.0.set_length_scale(value)?)
     }
     #[getter]
-    fn get_noise_w(&self) -> f32 {
-        self.0.synth_config.noise_w
+    fn get_noise_w(&self) -> PyPiperResult<f32> {
+        Ok(self.0.get_noise_w()?)
     }
     #[setter]
-    fn set_noise_w(&mut self, value: f32) {
-        if let Some(&mut ref mut vits) = Arc::get_mut(&mut self.0) {
-            vits.synth_config.noise_w = value;
-        }
+    fn set_noise_w(&self, value: f32) -> PyPiperResult<()> {
+        Ok(self.0.set_noise_w(value)?)
     }
 }
 
