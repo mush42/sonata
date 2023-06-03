@@ -1,7 +1,6 @@
 use espeak_phonemizer::text_to_phonemes;
 use ndarray::{Array1, Array2};
 use ndarray_stats::QuantileExt;
-use num_cpus;
 use once_cell::sync::{Lazy, OnceCell};
 use ort::{
     tensor::{DynOrtTensor, FromArray, InputTensor, OrtOwnedTensor},
