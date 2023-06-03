@@ -13,7 +13,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 const MAX_WAV_VALUE: f32 = 32767.0;
 const BOS: char = '^';
@@ -73,7 +73,7 @@ pub struct SynthesisConfig {
 }
 
 pub struct VitsModel {
-    synth_config: Mutex<SynthesisConfig>,
+    synth_config: RwLock<SynthesisConfig>,
     config: ModelConfig,
     onnx_path: PathBuf,
     session: OnceCell<Result<ort::Session, ort::OrtError>>,
@@ -83,7 +83,7 @@ impl VitsModel {
     pub fn new(config_path: PathBuf, onnx_path: PathBuf) -> PiperResult<Self> {
         match Self::load_model_config(&config_path) {
             Ok((config, synth_config)) => Ok(Self {
-                synth_config: Mutex::new(synth_config),
+                synth_config: RwLock::new(synth_config),
                 config,
                 onnx_path,
                 session: OnceCell::new(),
@@ -99,7 +99,7 @@ impl VitsModel {
         if self.config.num_speakers == 0 {
             return Err(PiperError::OperationError("This model is a single speaker model.".to_string()))
         }
-        if let Some(ref speaker) = self.synth_config.lock().unwrap().speaker {
+        if let Some(ref speaker) = self.synth_config.read().unwrap().speaker {
             Ok(Some(speaker.0.clone()))
         } else {
             Ok(None)
@@ -110,7 +110,7 @@ impl VitsModel {
             return Err(PiperError::OperationError("This model is a single speaker model.".to_string()))
         }
         if let Some(sid) = self.config.speaker_id_map.get(&name) {
-            let mut synth_config = self.synth_config.lock().unwrap();
+            let mut synth_config = self.synth_config.write().unwrap();
             synth_config.speaker = Some((name, *sid));
             Ok(())
         } else {
@@ -120,24 +120,24 @@ impl VitsModel {
         }
     }
     pub fn get_noise_scale(&self) -> PiperResult<f32> {
-        Ok(self.synth_config.lock().unwrap().noise_scale)
+        Ok(self.synth_config.read().unwrap().noise_scale)
     }
     pub fn set_noise_scale(&self, value: f32) -> PiperResult<()> {
-        self.synth_config.lock().unwrap().noise_scale = value;
+        self.synth_config.write().unwrap().noise_scale = value;
         Ok(())
     }
     pub fn get_length_scale(&self) -> PiperResult<f32> {
-        Ok(self.synth_config.lock().unwrap().length_scale)
+        Ok(self.synth_config.read().unwrap().length_scale)
     }
     pub fn set_length_scale(&self, value: f32) -> PiperResult<()> {
-        self.synth_config.lock().unwrap().length_scale = value;
+        self.synth_config.write().unwrap().length_scale = value;
         Ok(())
     }
     pub fn get_noise_w(&self) -> PiperResult<f32> {
-        Ok(self.synth_config.lock().unwrap().noise_w)
+        Ok(self.synth_config.read().unwrap().noise_w)
     }
     pub fn set_noise_w(&self, value: f32) -> PiperResult<()> {
-        self.synth_config.lock().unwrap().noise_w = value;
+        self.synth_config.write().unwrap().noise_w = value;
         Ok(())
     }
     fn infer_with_values(&self, phoneme_ids: Vec<i64>) -> PiperWaveResult {
@@ -151,7 +151,7 @@ impl VitsModel {
             }
         };
 
-        let synth_config = self.synth_config.lock().unwrap();
+        let synth_config = self.synth_config.read().unwrap();
         let mut input_tensors: Vec<InputTensor> = Vec::with_capacity(4);
         let ph_len = phoneme_ids.len();
 
