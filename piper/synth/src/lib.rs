@@ -166,9 +166,6 @@ impl PiperSpeechSynthesizer {
         )?)
     }
 
-    pub fn info(&self) -> PiperResult<String> {
-        self.0.info()
-    }
 }
 
 struct SpeechSynthesisTaskProvider {

@@ -11,8 +11,13 @@ crate-type = ["cdylib"]
 piper-core = { path = "../piper/core" }
 piper-synth = { path = "../piper/synth" }
 piper-vits = { path = "../piper/models/vits" }
+once_cell = "1.17.1"
 
 [dependencies.pyo3]
 version = "0.18.1"
 features = ["extension-module", "abi3-py37"]
 
+[dependencies.ort]
+version = "1.14.8"
+default-features = false
+features = ["load-dynamic"]

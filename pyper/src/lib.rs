@@ -4,6 +4,7 @@ use piper_synth::{
     PiperSpeechSynthesizer,
 };
 use piper_vits::VitsModel;
+use once_cell::sync::OnceCell;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -11,6 +12,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 type PyPiperResult<T> = Result<T, PiperException>;
+static ORT_ENVIRONMENT: OnceCell<Arc<ort::Environment>> = OnceCell::new();
+
 
 struct PiperException(PiperError);
 
@@ -190,11 +193,25 @@ impl BatchedSpeechStream {
 #[pyo3(name = "VitsModel")]
 struct PyVitsModel(Arc<VitsModel>);
 
+impl PyVitsModel {
+    fn get_ort_environment() -> &'static Arc<ort::Environment> {
+        ORT_ENVIRONMENT.get_or_init(|| {
+            Arc::new(
+                ort::Environment::builder()
+                    .with_name("piper")
+                    .with_execution_providers([ort::ExecutionProvider::cpu()])
+                    .build()
+                    .unwrap(),
+            )
+        })
+    }
+}
+
 #[pymethods]
 impl PyVitsModel {
     #[new]
     fn new(config_path: &str, model_path: &str) -> PyPiperResult<Self> {
-        let vits = VitsModel::new(PathBuf::from(config_path), PathBuf::from(model_path))?;
+        let vits = VitsModel::new(PathBuf::from(config_path), PathBuf::from(model_path), Self::get_ort_environment())?;
         Ok(Self(Arc::new(vits)))
     }
     #[getter]
@@ -233,6 +250,9 @@ impl PyVitsModel {
     fn set_noise_w(&self, value: f32) -> PyPiperResult<()> {
         Ok(self.0.set_noise_w(value)?)
     }
+    fn get_input_output_info(&self) -> PyPiperResult<String> {
+        Ok(self.0.get_input_output_info()?.join("\n"))
+    }
 }
 
 #[pyclass(weakref, module = "piper", frozen)]
@@ -246,10 +266,6 @@ impl Piper {
         let synthesizer = PiperSpeechSynthesizer::new(model)?;
         Ok(Self(synthesizer))
     }
-    fn info(&self) -> PyPiperResult<String> {
-        Ok(self.0.info()?)
-    }
-
     fn synthesize(
         &self,
         text: String,

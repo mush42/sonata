@@ -151,6 +151,5 @@ pub trait PiperModel {
     fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes>;
     fn speak_phonemes(&self, phonemes: &str) -> PiperWaveResult;
     fn wave_info(&self) -> PiperResult<PiperWaveInfo>;
-    fn info(&self) -> PiperResult<String>;
 
 }

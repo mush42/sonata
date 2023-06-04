@@ -582,6 +582,8 @@ dependencies = [
 name = "pyper"
 version = "0.1.0"
 dependencies = [
+ "once_cell",
+ "ort",
  "piper-core",
  "piper-synth",
  "piper-vits",

@@ -4,7 +4,7 @@ use ndarray_stats::QuantileExt;
 use once_cell::sync::{Lazy, OnceCell};
 use ort::{
     tensor::{DynOrtTensor, FromArray, InputTensor, OrtOwnedTensor},
-    Environment, ExecutionProvider, GraphOptimizationLevel, SessionBuilder,
+    Environment, GraphOptimizationLevel, SessionBuilder,
 };
 use piper_core::{
     Phonemes, PiperError, PiperModel, PiperResult, PiperWaveInfo, PiperWaveResult, PiperWaveSamples,
@@ -20,18 +20,7 @@ const BOS: char = '^';
 const EOS: char = '$';
 const PAD: char = '_';
 
-static CPU_COUNT: Lazy<i16> = Lazy::new(|| {
-    num_cpus::get().try_into().unwrap_or(2)
-});
-static ENVIRONMENT: Lazy<Arc<ort::Environment>> = Lazy::new(|| {
-    Arc::new(
-        Environment::builder()
-            .with_name("piper")
-            .with_execution_providers([ExecutionProvider::cpu()])
-            .build()
-            .unwrap(),
-    )
-});
+static CPU_COUNT: Lazy<i16> = Lazy::new(|| num_cpus::get().try_into().unwrap_or(2));
 
 #[derive(Deserialize, Default)]
 pub struct AudioConfig {
@@ -76,16 +65,22 @@ pub struct VitsModel {
     synth_config: RwLock<SynthesisConfig>,
     config: ModelConfig,
     onnx_path: PathBuf,
+    ort_env: &'static Arc<Environment>,
     session: OnceCell<Result<ort::Session, ort::OrtError>>,
 }
 
 impl VitsModel {
-    pub fn new(config_path: PathBuf, onnx_path: PathBuf) -> PiperResult<Self> {
+    pub fn new(
+        config_path: PathBuf,
+        onnx_path: PathBuf,
+        ort_env: &'static Arc<ort::Environment>,
+    ) -> PiperResult<Self> {
         match Self::load_model_config(&config_path) {
             Ok((config, synth_config)) => Ok(Self {
                 synth_config: RwLock::new(synth_config),
                 config,
                 onnx_path,
+                ort_env,
                 session: OnceCell::new(),
             }),
             Err(error) => Err(error),
@@ -97,7 +92,9 @@ impl VitsModel {
     }
     pub fn get_speaker(&self) -> PiperResult<Option<String>> {
         if self.config.num_speakers == 0 {
-            return Err(PiperError::OperationError("This model is a single speaker model.".to_string()))
+            return Err(PiperError::OperationError(
+                "This model is a single speaker model.".to_string(),
+            ));
         }
         if let Some(ref speaker) = self.synth_config.read().unwrap().speaker {
             Ok(Some(speaker.0.clone()))
@@ -107,16 +104,19 @@ impl VitsModel {
     }
     pub fn set_speaker(&self, name: String) -> PiperResult<()> {
         if self.config.num_speakers == 0 {
-            return Err(PiperError::OperationError("This model is a single speaker model.".to_string()))
+            return Err(PiperError::OperationError(
+                "This model is a single speaker model.".to_string(),
+            ));
         }
         if let Some(sid) = self.config.speaker_id_map.get(&name) {
             let mut synth_config = self.synth_config.write().unwrap();
             synth_config.speaker = Some((name, *sid));
             Ok(())
         } else {
-            Err(PiperError::OperationError(
-                format!("Invalid speaker name: `{}`", name)
-            ))
+            Err(PiperError::OperationError(format!(
+                "Invalid speaker name: `{}`",
+                name
+            )))
         }
     }
     pub fn get_noise_scale(&self) -> PiperResult<f32> {
@@ -171,7 +171,7 @@ impl VitsModel {
         if self.config.num_speakers > 1 {
             let sid = match synth_config.speaker {
                 Some((_, sid)) => sid,
-                None => 0
+                None => 0,
             };
             let sid_tensor = Array1::<i64>::from_iter([sid]);
             input_tensors.push(InputTensor::from_array(sid_tensor.into_dyn()));
@@ -221,7 +221,7 @@ impl VitsModel {
     }
     fn get_or_create_inference_session(&self) -> &Result<ort::Session, ort::OrtError> {
         self.session.get_or_init(|| {
-            SessionBuilder::new(&ENVIRONMENT)?
+            SessionBuilder::new(self.ort_env)?
                 .with_optimization_level(GraphOptimizationLevel::Level3)?
                 .with_allocator(ort::AllocatorType::Arena)?
                 .with_memory_pattern(true)?
@@ -231,7 +231,7 @@ impl VitsModel {
                 .with_model_from_file(&self.onnx_path)
         })
     }
-    fn get_input_output_info(&self) -> PiperResult<Vec<String>> {
+    pub fn get_input_output_info(&self) -> PiperResult<Vec<String>> {
         let session = match self.get_or_create_inference_session() {
             Ok(ref session) => session,
             Err(err) => {
@@ -343,9 +343,5 @@ impl PiperModel for VitsModel {
             num_channels: 1usize,
             sample_width: 2usize,
         })
-    }
-
-    fn info(&self) -> PiperResult<String> {
-        Ok(self.get_input_output_info()?.join("\n"))
     }
 }
