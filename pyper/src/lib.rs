@@ -5,25 +5,27 @@ use piper_synth::{
 };
 use piper_vits::VitsModel;
 use once_cell::sync::OnceCell;
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
+use pyo3::create_exception;
 use pyo3::types::PyBytes;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-type PyPiperResult<T> = Result<T, PiperException>;
+type PyPiperResult<T> = Result<T, PyPiperError>;
 static ORT_ENVIRONMENT: OnceCell<Arc<ort::Environment>> = OnceCell::new();
 
+create_exception!(piper, PiperException, PyException, "Base Exception for all exceptions raised by piper.");
 
-struct PiperException(PiperError);
+struct PyPiperError(PiperError);
 
-impl From<PiperException> for PyErr {
-    fn from(other: PiperException) -> Self {
-        PyRuntimeError::new_err(other.0.to_string())
+impl From<PyPiperError> for PyErr {
+    fn from(other: PyPiperError) -> Self {
+        PiperException::new_err(other.0.to_string())
     }
 }
 
-impl From<PiperError> for PiperException {
+impl From<PiperError> for PyPiperError {
     fn from(other: PiperError) -> Self {
         Self(other)
     }
@@ -120,7 +122,7 @@ impl LazySpeechStream {
         match audio_result {
             Ok(audio_data) => Some(WaveSamples(audio_data)),
             Err(e) => {
-                PyErr::from(PiperException::from(e)).restore(py);
+                PyErr::from(PyPiperError::from(e)).restore(py);
                 None
             }
         }
@@ -151,7 +153,7 @@ impl ParallelSpeechStream {
         match audio_result {
             Ok(audio_data) => Some(WaveSamples(audio_data)),
             Err(e) => {
-                PyErr::from(PiperException::from(e)).restore(py);
+                PyErr::from(PyPiperError::from(e)).restore(py);
                 None
             }
         }
@@ -182,7 +184,7 @@ impl BatchedSpeechStream {
         match audio_result {
             Ok(audio_data) => Some(WaveSamples(audio_data)),
             Err(e) => {
-                PyErr::from(PiperException::from(e)).restore(py);
+                PyErr::from(PyPiperError::from(e)).restore(py);
                 None
             }
         }
@@ -323,6 +325,7 @@ impl Piper {
 /// A fast, local neural text-to-speech system
 #[pymodule]
 fn pyper(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add("PiperException", _py.get_type::<PiperException>())?;
     m.add_class::<PyVitsModel>()?;
     m.add_class::<PyAudioOutputConfig>()?;
     m.add_class::<WaveSamples>()?;
