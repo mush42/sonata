@@ -1,4 +1,4 @@
-use piper_core::{PiperError, PiperWaveSamples};
+use piper_core::{PiperError, PiperWaveSamples, PiperWaveInfo, PiperModel};
 use piper_synth::{
     AudioOutputConfig, PiperSpeechStreamBatched, PiperSpeechStreamLazy, PiperSpeechStreamParallel,
     PiperSpeechSynthesizer,
@@ -30,6 +30,33 @@ impl From<PiperError> for PyPiperError {
         Self(other)
     }
 }
+
+#[pyclass(weakref, module = "piper", frozen)]
+#[pyo3(name = "PiperWaveInfo")]
+struct PyWaveInfo(PiperWaveInfo);
+
+#[pymethods]
+impl PyWaveInfo {
+    #[getter]
+    fn get_sample_rate(&self) -> usize {
+        self.0.sample_rate
+    }
+    #[getter]
+    fn get_num_channels(&self) -> usize {
+        self.0.num_channels
+    }
+    #[getter]
+    fn get_sample_width(&self) -> usize {
+        self.0.sample_width
+    }
+}
+
+impl From<PiperWaveInfo> for PyWaveInfo {
+    fn from(other: PiperWaveInfo) -> Self {
+        Self(other)
+    }
+}
+
 
 #[pyclass(weakref, module = "piper", frozen)]
 #[pyo3(name = "AudioOutputConfig")]
@@ -251,6 +278,9 @@ impl PyVitsModel {
     #[setter]
     fn set_noise_w(&self, value: f32) -> PyPiperResult<()> {
         Ok(self.0.set_noise_w(value)?)
+    }
+    fn get_wave_output_info(&self) -> PyPiperResult<PyWaveInfo> {
+        Ok(self.0.wave_info()?.into())
     }
     fn get_input_output_info(&self) -> PyPiperResult<String> {
         Ok(self.0.get_input_output_info()?.join("\n"))

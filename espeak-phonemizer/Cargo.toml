@@ -6,4 +6,4 @@ links = "espeak-ng"
 
 [dependencies]
 ffi-support = "0.4.4"
-once_cell = "1.17.1"
+once_cell = "1.18.0"
