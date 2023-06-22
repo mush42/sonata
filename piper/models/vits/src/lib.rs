@@ -6,9 +6,7 @@ use ort::{
     tensor::{DynOrtTensor, FromArray, InputTensor, OrtOwnedTensor},
     Environment, GraphOptimizationLevel, SessionBuilder,
 };
-use piper_core::{
-    Phonemes, PiperError, PiperModel, PiperResult, PiperWaveInfo, PiperWaveResult, PiperWaveSamples,
-};
+use piper_core::{Phonemes, PiperError, PiperModel, PiperResult, PiperWaveInfo, PiperWaveSamples};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
@@ -20,7 +18,7 @@ const BOS: char = '^';
 const EOS: char = '$';
 const PAD: char = '_';
 
-static CPU_COUNT: Lazy<i16> = Lazy::new(|| num_cpus::get().try_into().unwrap_or(2));
+static CPU_COUNT: Lazy<i16> = Lazy::new(|| num_cpus::get().try_into().unwrap_or(4));
 
 #[derive(Deserialize, Default)]
 pub struct AudioConfig {
@@ -140,7 +138,10 @@ impl VitsModel {
         self.synth_config.write().unwrap().noise_w = value;
         Ok(())
     }
-    fn infer_with_values(&self, phoneme_ids: Vec<i64>) -> PiperWaveResult {
+    fn infer_with_values(
+        &self,
+        mut input_batches: Vec<Vec<i64>>,
+    ) -> PiperResult<Vec<PiperWaveSamples>> {
         let session = match self.get_or_create_inference_session() {
             Ok(ref session) => session,
             Err(err) => {
@@ -153,12 +154,31 @@ impl VitsModel {
 
         let synth_config = self.synth_config.read().unwrap();
         let mut input_tensors: Vec<InputTensor> = Vec::with_capacity(4);
-        let ph_len = phoneme_ids.len();
 
-        let inputs = Array2::<i64>::from_shape_vec((1, ph_len), phoneme_ids).unwrap();
+        let pad_input_id = self
+            .config
+            .phoneme_id_map
+            .get(&PAD)
+            .unwrap()
+            .first()
+            .unwrap();
+        let num_batches = input_batches.len();
+        let max_len = match input_batches.iter().map(|v| v.len()).max() {
+            Some(length) => length,
+            None => {
+                return Err(PiperError::OperationError(
+                    "Empty phoneme input".to_string(),
+                ))
+            }
+        };
+        for input in input_batches.iter_mut() {
+            input.resize(max_len, *pad_input_id);
+        }
+        let input_batches = Vec::from_iter(input_batches.into_iter().flatten());
+        let inputs = Array2::<i64>::from_shape_vec((num_batches, max_len), input_batches).unwrap();
         input_tensors.push(InputTensor::from_array(inputs.into_dyn()));
 
-        let input_lengths = Array1::<i64>::from_iter([ph_len.try_into().unwrap()]);
+        let input_lengths = Array1::<i64>::from_iter((0..num_batches).map(|_| max_len as i64));
         input_tensors.push(InputTensor::from_array(input_lengths.into_dyn()));
 
         let scales = Array1::<f32>::from_iter([
@@ -199,25 +219,52 @@ impl VitsModel {
                 )))
             }
         };
-        let audio_output = outputs.view();
+        let outputs = outputs.view();
+        let audio_outputs = outputs
+            .view()
+            .into_shape((num_batches, *outputs.shape().last().unwrap()))
+            .unwrap();
 
-        let Ok(min_audio_value) = audio_output.min() else {
-            return Err(PiperError::OperationError("Invalid output from model inference.".to_string()))
-        };
-        let Ok(max_audio_value) = audio_output.max() else {
-            return Err(PiperError::OperationError("Invalid output from model inference. ".to_string()))
-        };
-        let abs_max = max_audio_value.max(min_audio_value.abs());
-        let audio_scale = MAX_WAV_VALUE / abs_max.max(0.01f32);
-        let samples: Vec<i16> = audio_output
-            .iter()
-            .map(|i| (i * audio_scale).clamp(i16::MIN as f32, i16::MAX as f32) as i16)
-            .collect::<Vec<i16>>();
-        Ok(PiperWaveSamples::new(
-            samples,
-            self.config.audio.sample_rate as usize,
-            Some(inference_ms),
-        ))
+        let mut samples: Vec<Vec<i16>> = Vec::with_capacity(num_batches);
+        for audio in audio_outputs.rows().into_iter() {
+            let Ok(min_audio_value) = audio.min() else {
+                return Err(PiperError::OperationError("Invalid output from model inference.".to_string()))
+            };
+            let Ok(max_audio_value) = audio.max() else {
+                return Err(PiperError::OperationError("Invalid output from model inference. ".to_string()))
+            };
+            let abs_max = max_audio_value.max(min_audio_value.abs());
+            let audio_scale = MAX_WAV_VALUE / abs_max.max(0.01f32);
+            let clampped = Vec::from_iter(
+                audio.into_iter().map(|i| (i * audio_scale).clamp(i16::MIN as f32, i16::MAX as f32) as i16)
+            );
+            samples.push(clampped);
+        }
+        Ok(Vec::from_iter(samples.into_iter().map(|audio| {
+            PiperWaveSamples::new(
+                audio,
+                self.config.audio.sample_rate as usize,
+                Some(inference_ms),
+            )
+        })))
+    }
+    fn phonemes_to_input_ids(
+        &self,
+        phonemes: &str,
+        pad_id: i64,
+        bos_id: i64,
+        eos_id: i64,
+    ) -> Vec<i64> {
+        let mut phoneme_ids: Vec<i64> = Vec::with_capacity((phonemes.len() + 1) * 2);
+        phoneme_ids.push(bos_id);
+        for phoneme in phonemes.chars() {
+            if let Some(id) = self.config.phoneme_id_map.get(&phoneme) {
+                phoneme_ids.push(*id.first().unwrap());
+                phoneme_ids.push(pad_id);
+            }
+        }
+        phoneme_ids.push(eos_id);
+        phoneme_ids
     }
     fn get_or_create_inference_session(&self) -> &Result<ort::Session, ort::OrtError> {
         self.session.get_or_init(|| {
@@ -301,40 +348,37 @@ impl PiperModel for VitsModel {
         Ok(phonemes.into())
     }
 
-    fn speak_phonemes(&self, phonemes: &str) -> PiperWaveResult {
-        let mut phoneme_ids: Vec<i64> = Vec::with_capacity((phonemes.len() + 1) * 2);
-        let pad = self
+    fn speak_phonemes(
+        &self,
+        phoneme_batches: Vec< String>,
+    ) -> PiperResult<Vec<PiperWaveSamples>> {
+        let pad_id = *self
             .config
             .phoneme_id_map
             .get(&PAD)
             .unwrap()
             .first()
             .unwrap();
-        phoneme_ids.push(
-            *self
-                .config
-                .phoneme_id_map
-                .get(&BOS)
-                .unwrap()
-                .first()
-                .unwrap(),
+        let bos_id = *self
+            .config
+            .phoneme_id_map
+            .get(&BOS)
+            .unwrap()
+            .first()
+            .unwrap();
+        let eos_id = *self
+            .config
+            .phoneme_id_map
+            .get(&EOS)
+            .unwrap()
+            .first()
+            .unwrap();
+        let phoneme_batches = Vec::from_iter(
+            phoneme_batches
+                .into_iter()
+                .map(|batch| self.phonemes_to_input_ids(&batch, pad_id, bos_id, eos_id)),
         );
-        for phoneme in phonemes.chars() {
-            if let Some(id) = self.config.phoneme_id_map.get(&phoneme) {
-                phoneme_ids.push(*id.first().unwrap());
-                phoneme_ids.push(*pad);
-            }
-        }
-        phoneme_ids.push(
-            *self
-                .config
-                .phoneme_id_map
-                .get(&EOS)
-                .unwrap()
-                .first()
-                .unwrap(),
-        );
-        self.infer_with_values(phoneme_ids)
+        self.infer_with_values(phoneme_batches)
     }
 
     fn wave_info(&self) -> PiperResult<PiperWaveInfo> {

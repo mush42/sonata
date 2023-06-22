@@ -130,11 +130,10 @@ impl PiperWaveSamples {
             self.samples.iter(),
             self.info.sample_rate as u32,
             self.info.num_channels as u32,
-            self.info.sample_width as u32
+            self.info.sample_width as u32,
         )?)
     }
 }
-
 
 impl IntoIterator for PiperWaveSamples {
     type Item = i16;
@@ -145,11 +144,11 @@ impl IntoIterator for PiperWaveSamples {
     }
 }
 
-
 pub trait PiperModel {
-
     fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes>;
-    fn speak_phonemes(&self, phonemes: &str) -> PiperWaveResult;
+    fn speak_phonemes(
+        &self,
+        phoneme_batches: Vec< String>,
+    ) -> PiperResult<Vec<PiperWaveSamples>>;
     fn wave_info(&self) -> PiperResult<PiperWaveInfo>;
-
 }

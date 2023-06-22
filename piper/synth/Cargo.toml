@@ -7,6 +7,3 @@ edition = "2021"
 piper-core = { path = "../core" }
 sonic-sys = { path = "../../sonic-sys" }
 wave-writer = { path = "../../wave-writer" }
-rayon = "1.7.0"
-once_cell = "1.18.0"
-num_cpus = "1.15.0"
