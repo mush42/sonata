@@ -1,6 +1,8 @@
 mod utils;
 
+use once_cell::sync::{Lazy, OnceCell};
 use piper_core::{PiperError, PiperModel, PiperResult, PiperWaveResult, PiperWaveSamples};
+use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::collections::vec_deque::VecDeque;
 use std::sync::Arc;
 
@@ -9,6 +11,14 @@ const VOLUME_RANGE: (f32, f32) = (0.1f32, 1.9f32);
 const PITCH_RANGE: (f32, f32) = (0.5f32, 1.5f32);
 /// Batch size when using batched synthesis mode
 const SPEECH_STREAM_BATCH_SIZE: usize = 4;
+
+static SYNTHESIS_THREAD_POOL: Lazy<ThreadPool> = Lazy::new(|| {
+    ThreadPoolBuilder::new()
+        .thread_name(|i| format!("piper_synth_{}", i))
+        .num_threads(num_cpus::get() / 2)
+        .build()
+        .unwrap()
+});
 
 #[derive(Clone)]
 pub struct AudioOutputConfig {
@@ -235,8 +245,8 @@ impl Iterator for PiperSpeechStreamParallel {
 pub struct PiperSpeechStreamBatched {
     provider: Arc<SpeechSynthesisTaskProvider>,
     sentence_phonemes: std::vec::IntoIter<String>,
+    channel: SpeechSynthesisChannel,
     batch_size: usize,
-    queue: VecDeque<PiperWaveResult>,
 }
 
 impl PiperSpeechStreamBatched {
@@ -245,20 +255,18 @@ impl PiperSpeechStreamBatched {
         let mut instance = Self {
             provider: Arc::new(provider),
             sentence_phonemes,
+            channel: SpeechSynthesisChannel::new(batch_size)?,
             batch_size,
-            queue: VecDeque::new(),
         };
-        instance.send_batch()?;
+        instance.send_batch();
         Ok(instance)
     }
-    fn send_batch(&mut self) -> PiperResult<()> {
+    fn send_batch(&mut self) {
         let next_batch = Vec::from_iter((&mut self.sentence_phonemes).take(self.batch_size));
         if !next_batch.is_empty() {
-            for wave_samples in self.provider.process_batches(next_batch)? {
-                self.queue.push_back(Ok(wave_samples));
-            }
+            let provider = Arc::clone(&self.provider);
+            self.channel.put(provider, next_batch);
         }
-        Ok(())
     }
 }
 
@@ -266,9 +274,65 @@ impl Iterator for PiperSpeechStreamBatched {
     type Item = PiperWaveResult;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Err(e) = self.send_batch() {
-            return Some(Err(e))
+        self.send_batch();
+        self.channel.get()
+    }
+}
+
+struct SpeechSynthesisTask(Arc<OnceCell<PiperResult<Vec<PiperWaveSamples>>>>);
+
+impl SpeechSynthesisTask {
+    fn new(provider: Arc<SpeechSynthesisTaskProvider>, batch: Vec<String>) -> Self {
+        let instance = Self(Arc::new(OnceCell::new()));
+        let result = Arc::clone(&instance.0);
+        SYNTHESIS_THREAD_POOL.spawn_fifo(move || {
+            result.set(provider.process_batches(batch)).unwrap();
+        });
+        instance
+    }
+    fn get_result(self) -> PiperResult<Vec<PiperWaveSamples>> {
+        self.0.wait();
+        if let Ok(result) = Arc::try_unwrap(self.0) {
+            result.into_inner().unwrap()
+        } else {
+            Err(PiperError::OperationError(
+                "Failed to obtain results".to_string(),
+            ))
         }
-        self.queue.pop_front()
+    }
+}
+
+struct SpeechSynthesisChannel {
+    task_queue: VecDeque<SpeechSynthesisTask>,
+    result_queue: VecDeque<PiperWaveSamples>,
+}
+
+impl SpeechSynthesisChannel {
+    fn new(batch_size: usize) -> PiperResult<Self> {
+        Ok(Self {
+            result_queue: VecDeque::with_capacity(batch_size * 2),
+            task_queue: VecDeque::with_capacity(batch_size),
+        })
+    }
+    fn put(&mut self, provider: Arc<SpeechSynthesisTaskProvider>, batch: Vec<String>) {
+        self.task_queue
+            .push_back(SpeechSynthesisTask::new(provider, batch));
+    }
+    fn get(&mut self) -> Option<PiperWaveResult> {
+        if let Some(result) = self.result_queue.pop_front() {
+            return Some(Ok(result));
+        }
+        if let Some(task) = self.task_queue.pop_front() {
+            let results = match task.get_result() {
+                Ok(res) => res,
+                Err(e) => return Some(Err(e)),
+            };
+            for audio in results {
+                self.result_queue.push_back(audio);
+            }
+            self.get()
+        } else {
+            None
+        }
     }
 }
