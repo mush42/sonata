@@ -1,5 +1,0 @@
-[build]
-target = "i686-pc-windows-msvc"
-
-[env]
-PYTHON_SYS_EXECUTABLE = "3.7"

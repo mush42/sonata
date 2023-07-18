@@ -610,9 +610,9 @@ checksum = "dd8b5dd2ae5ed71462c540258bedcb51965123ad7e7ccf4b9a8cafaa4a63576d"
 
 [[package]]
 name = "ort"
-version = "1.14.8"
+version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "562aedddfc14391badc2e527fd568164bd2fb108e2572cd3fe0b53ed440ec439"
+checksum = "df8602d59762c7fad45311d370da7a8eeb089f6f983cd034a9ddf1d4ff2781d0"
 dependencies = [
  "flate2",
  "lazy_static",

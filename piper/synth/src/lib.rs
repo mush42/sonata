@@ -15,7 +15,7 @@ const SPEECH_STREAM_BATCH_SIZE: usize = 4;
 static SYNTHESIS_THREAD_POOL: Lazy<ThreadPool> = Lazy::new(|| {
     ThreadPoolBuilder::new()
         .thread_name(|i| format!("piper_synth_{}", i))
-        .num_threads(num_cpus::get() / 2)
+        .num_threads(num_cpus::get())
         .build()
         .unwrap()
 });
@@ -157,8 +157,8 @@ impl PiperSpeechSynthesizer {
             filename.into(),
             samples.iter(),
             self.0.wave_info()?.sample_rate as u32,
-            1u32,
-            2u32,
+            self.0.wave_info()?.num_channels.try_into().unwrap(),
+            self.0.wave_info()?.sample_width.try_into().unwrap(),
         )?)
     }
 }
@@ -310,8 +310,8 @@ struct SpeechSynthesisChannel {
 impl SpeechSynthesisChannel {
     fn new(batch_size: usize) -> PiperResult<Self> {
         Ok(Self {
-            result_queue: VecDeque::with_capacity(batch_size * 2),
-            task_queue: VecDeque::with_capacity(batch_size),
+            result_queue: VecDeque::with_capacity(batch_size * 4),
+            task_queue: VecDeque::with_capacity(batch_size * 4),
         })
     }
     fn put(&mut self, provider: Arc<SpeechSynthesisTaskProvider>, batch: Vec<String>) {

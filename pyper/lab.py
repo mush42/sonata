@@ -3,7 +3,7 @@ from pyper import Piper, VitsModel, AudioOutputConfig
 
 
 
-os.environ["ORT_DYLIB_PATH"] = r"D:\onnxruntime_libs\x86\onnxruntime.dll"
+os.environ["ORT_DYLIB_PATH"] = r"C:\Users\ibnom\Downloads\Microsoft.ML.OnnxRuntime.DirectML.1.15.1\runtimes\win-x64\native\onnxruntime.dll"
 os.environ["PIPER_ESPEAKNG_DATA_DIRECTORY"] = r"D:\projects\blindpandas\piper-rs\deps\windows\espeak-ng-build"
 
 vits = VitsModel(

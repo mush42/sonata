@@ -1,11 +1,8 @@
 use espeak_phonemizer::text_to_phonemes;
-use ndarray::{Array1, Array2};
+use ndarray::{Array1, Array2, CowArray};
 use ndarray_stats::QuantileExt;
 use once_cell::sync::{Lazy, OnceCell};
-use ort::{
-    tensor::{DynOrtTensor, FromArray, InputTensor, OrtOwnedTensor},
-    Environment, GraphOptimizationLevel, SessionBuilder,
-};
+use ort::{tensor::OrtOwnedTensor, Environment, GraphOptimizationLevel, SessionBuilder, Value};
 use piper_core::{Phonemes, PiperError, PiperModel, PiperResult, PiperWaveInfo, PiperWaveSamples};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -153,7 +150,6 @@ impl VitsModel {
         };
 
         let synth_config = self.synth_config.read().unwrap();
-        let mut input_tensors: Vec<InputTensor> = Vec::with_capacity(4);
 
         let pad_input_id = self
             .config
@@ -175,31 +171,44 @@ impl VitsModel {
             input.resize(max_len, *pad_input_id);
         }
         let input_batches = Vec::from_iter(input_batches.into_iter().flatten());
-        let inputs = Array2::<i64>::from_shape_vec((num_batches, max_len), input_batches).unwrap();
-        input_tensors.push(InputTensor::from_array(inputs.into_dyn()));
+        let phoneme_inputs = CowArray::from(
+            Array2::<i64>::from_shape_vec((num_batches, max_len), input_batches).unwrap(),
+        )
+        .into_dyn();
 
-        let input_lengths = Array1::<i64>::from_iter((0..num_batches).map(|_| max_len as i64));
-        input_tensors.push(InputTensor::from_array(input_lengths.into_dyn()));
+        let input_lengths = CowArray::from(Array1::<i64>::from_iter(
+            (0..num_batches).map(|_| max_len as i64),
+        ))
+        .into_dyn();
 
         let scales = Array1::<f32>::from_iter([
             synth_config.noise_scale,
             synth_config.length_scale,
             synth_config.noise_w,
         ]);
-        input_tensors.push(InputTensor::from_array(scales.into_dyn()));
+        let scales = CowArray::from(scales).into_dyn();
 
-        if self.config.num_speakers > 1 {
+        let speaker_id = if self.config.num_speakers > 1 {
             let sid = match synth_config.speaker {
                 Some((_, sid)) => sid,
                 None => 0,
             };
-            let sid_tensor = Array1::<i64>::from_iter([sid]);
-            input_tensors.push(InputTensor::from_array(sid_tensor.into_dyn()));
-        }
+            Some(CowArray::from(Array1::<i64>::from_iter([sid])).into_dyn())
+        } else {
+            None
+        };
 
         let timer = std::time::Instant::now();
-        let outputs: Vec<DynOrtTensor<ndarray::Dim<ndarray::IxDynImpl>>> =
-            match session.run(input_tensors) {
+        let outputs: Vec<Value> = {
+            let mut inputs = vec![
+                Value::from_array(session.allocator(), &phoneme_inputs).unwrap(),
+                Value::from_array(session.allocator(), &input_lengths).unwrap(),
+                Value::from_array(session.allocator(), &scales).unwrap(),
+            ];
+            if let Some(ref sid_tensor) = speaker_id {
+                inputs.push(Value::from_array(session.allocator(), sid_tensor).unwrap());
+            }
+            match session.run(inputs) {
                 Ok(out) => out,
                 Err(e) => {
                     return Err(PiperError::OperationError(format!(
@@ -207,7 +216,8 @@ impl VitsModel {
                         e
                     )))
                 }
-            };
+            }
+        };
         let inference_ms = timer.elapsed().as_millis() as f32;
 
         let outputs: OrtOwnedTensor<f32, _> = match outputs[0].try_extract() {
@@ -236,7 +246,9 @@ impl VitsModel {
             let abs_max = max_audio_value.max(min_audio_value.abs());
             let audio_scale = MAX_WAV_VALUE / abs_max.max(0.01f32);
             let clampped = Vec::from_iter(
-                audio.into_iter().map(|i| (i * audio_scale).clamp(i16::MIN as f32, i16::MAX as f32) as i16)
+                audio
+                    .into_iter()
+                    .map(|i| (i * audio_scale).clamp(i16::MIN as f32, i16::MAX as f32) as i16),
             );
             samples.push(clampped);
         }
@@ -348,10 +360,7 @@ impl PiperModel for VitsModel {
         Ok(phonemes.into())
     }
 
-    fn speak_phonemes(
-        &self,
-        phoneme_batches: Vec< String>,
-    ) -> PiperResult<Vec<PiperWaveSamples>> {
+    fn speak_phonemes(&self, phoneme_batches: Vec<String>) -> PiperResult<Vec<PiperWaveSamples>> {
         let pad_id = *self
             .config
             .phoneme_id_map

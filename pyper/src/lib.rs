@@ -228,7 +228,9 @@ impl PyVitsModel {
             Arc::new(
                 ort::Environment::builder()
                     .with_name("piper")
-                    .with_execution_providers([ort::ExecutionProvider::cpu()])
+                    .with_execution_providers([
+                        ort::ExecutionProvider::CPU(Default::default())
+                    ])
                     .build()
                     .unwrap(),
             )
