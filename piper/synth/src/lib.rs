@@ -2,6 +2,7 @@ mod utils;
 
 use once_cell::sync::{Lazy, OnceCell};
 use piper_core::{PiperError, PiperModel, PiperResult, PiperWaveResult, PiperWaveSamples};
+use rayon::prelude::*;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::collections::vec_deque::VecDeque;
 use std::sync::Arc;
@@ -173,8 +174,16 @@ impl SpeechSynthesisTaskProvider {
     fn get_phonemes(&self) -> PiperResult<Vec<String>> {
         Ok(self.model.phonemize_text(&self.text)?.to_vec())
     }
+    fn process_one_sentence(&self, phonemes: String) -> PiperWaveResult {
+        let wave_samples = self.model.speak_one_sentence(vec![phonemes])?.pop().unwrap();
+        match self.output_config {
+            Some(ref config) => config.apply(wave_samples),
+            None => Ok(wave_samples),
+        }
+    }
+    #[allow(dead_code)]
     fn process_batches(&self, phonemes: Vec<String>) -> PiperResult<Vec<PiperWaveSamples>> {
-        let wave_samples = self.model.speak_phonemes(phonemes)?;
+        let wave_samples = self.model.speak_batch(phonemes)?;
         match self.output_config {
             Some(ref config) => {
                 let mut processed: Vec<PiperWaveSamples> = Vec::with_capacity(wave_samples.len());
@@ -208,8 +217,8 @@ impl Iterator for PiperSpeechStreamLazy {
 
     fn next(&mut self) -> Option<Self::Item> {
         let next_batch = self.sentence_phonemes.next()?;
-        match self.provider.process_batches(vec![next_batch]) {
-            Ok(ws) => ws.into_iter().next().map(Ok),
+        match  self.provider.process_one_sentence(next_batch) {
+            Ok(ws) => Some(Ok(ws)),
             Err(e) => Some(Err(e)),
         }
     }
@@ -222,10 +231,9 @@ pub struct PiperSpeechStreamParallel {
 
 impl PiperSpeechStreamParallel {
     fn new(provider: SpeechSynthesisTaskProvider) -> PiperResult<Self> {
-        let calculated_result: Vec<PiperWaveResult> = provider
-            .process_batches(provider.get_phonemes()?)?
-            .into_iter()
-            .map(Ok)
+        let calculated_result: Vec<PiperWaveResult> = provider.get_phonemes()?
+            .par_iter()
+            .map(|ph| provider.process_one_sentence(ph.to_string()))
             .collect();
         Ok(Self {
             precalculated_results: calculated_result.into_iter(),
@@ -279,21 +287,25 @@ impl Iterator for PiperSpeechStreamBatched {
     }
 }
 
-struct SpeechSynthesisTask(Arc<OnceCell<PiperResult<Vec<PiperWaveSamples>>>>);
+struct SpeechSynthesisTask(Arc<OnceCell<Vec<PiperWaveResult>>>);
 
 impl SpeechSynthesisTask {
     fn new(provider: Arc<SpeechSynthesisTaskProvider>, batch: Vec<String>) -> Self {
         let instance = Self(Arc::new(OnceCell::new()));
         let result = Arc::clone(&instance.0);
         SYNTHESIS_THREAD_POOL.spawn_fifo(move || {
-            result.set(provider.process_batches(batch)).unwrap();
+            let wave_samples: Vec<PiperWaveResult> = batch
+                .par_iter()
+                .map(|ph| provider.process_one_sentence(ph.to_string()))
+                .collect();
+            result.set(wave_samples).unwrap();
         });
         instance
     }
-    fn get_result(self) -> PiperResult<Vec<PiperWaveSamples>> {
+    fn get_result(self) -> PiperResult<Vec<PiperWaveResult>> {
         self.0.wait();
         if let Ok(result) = Arc::try_unwrap(self.0) {
-            result.into_inner().unwrap()
+            Ok(result.into_inner().unwrap())
         } else {
             Err(PiperError::OperationError(
                 "Failed to obtain results".to_string(),
@@ -304,7 +316,7 @@ impl SpeechSynthesisTask {
 
 struct SpeechSynthesisChannel {
     task_queue: VecDeque<SpeechSynthesisTask>,
-    result_queue: VecDeque<PiperWaveSamples>,
+    result_queue: VecDeque<PiperWaveResult>,
 }
 
 impl SpeechSynthesisChannel {
@@ -320,7 +332,7 @@ impl SpeechSynthesisChannel {
     }
     fn get(&mut self) -> Option<PiperWaveResult> {
         if let Some(result) = self.result_queue.pop_front() {
-            return Some(Ok(result));
+            return Some(result);
         }
         if let Some(task) = self.task_queue.pop_front() {
             let results = match task.get_result() {

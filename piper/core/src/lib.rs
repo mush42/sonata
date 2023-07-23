@@ -146,9 +146,10 @@ impl IntoIterator for PiperWaveSamples {
 
 pub trait PiperModel {
     fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes>;
-    fn speak_phonemes(
+    fn speak_batch(
         &self,
         phoneme_batches: Vec< String>,
     ) -> PiperResult<Vec<PiperWaveSamples>>;
+    fn speak_one_sentence(&self, phonemes:  String) -> PiperWaveResult;
     fn wave_info(&self) -> PiperResult<PiperWaveInfo>;
 }

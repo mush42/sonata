@@ -135,7 +135,7 @@ impl VitsModel {
         self.synth_config.write().unwrap().noise_w = value;
         Ok(())
     }
-    fn infer_with_values(
+    fn infer_with_values_batched(
         &self,
         mut input_batches: Vec<Vec<i64>>,
     ) -> PiperResult<Vec<PiperWaveSamples>> {
@@ -260,6 +260,7 @@ impl VitsModel {
             )
         })))
     }
+
     fn phonemes_to_input_ids(
         &self,
         phonemes: &str,
@@ -360,7 +361,7 @@ impl PiperModel for VitsModel {
         Ok(phonemes.into())
     }
 
-    fn speak_phonemes(&self, phoneme_batches: Vec<String>) -> PiperResult<Vec<PiperWaveSamples>> {
+    fn speak_batch(&self, phoneme_batches: Vec<String>) -> PiperResult<Vec<PiperWaveSamples>> {
         let pad_id = *self
             .config
             .phoneme_id_map
@@ -387,7 +388,33 @@ impl PiperModel for VitsModel {
                 .into_iter()
                 .map(|batch| self.phonemes_to_input_ids(&batch, pad_id, bos_id, eos_id)),
         );
-        self.infer_with_values(phoneme_batches)
+        self.infer_with_values_batched(phoneme_batches)
+    }
+
+    fn speak_one_sentence(&self, phonemes: String) -> PiperWaveResult {
+        let pad_id = *self
+            .config
+            .phoneme_id_map
+            .get(&PAD)
+            .unwrap()
+            .first()
+            .unwrap();
+        let bos_id = *self
+            .config
+            .phoneme_id_map
+            .get(&BOS)
+            .unwrap()
+            .first()
+            .unwrap();
+        let eos_id = *self
+            .config
+            .phoneme_id_map
+            .get(&EOS)
+            .unwrap()
+            .first()
+            .unwrap();
+        let phonemes = self.phonemes_to_input_ids(&batch, pad_id, bos_id, eos_id);
+        self.infer_with_values(phonemes)
     }
 
     fn wave_info(&self) -> PiperResult<PiperWaveInfo> {
