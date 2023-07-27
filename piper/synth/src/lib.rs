@@ -175,7 +175,7 @@ impl SpeechSynthesisTaskProvider {
         Ok(self.model.phonemize_text(&self.text)?.to_vec())
     }
     fn process_one_sentence(&self, phonemes: String) -> PiperWaveResult {
-        let wave_samples = self.model.speak_one_sentence(vec![phonemes])?.pop().unwrap();
+        let wave_samples = self.model.speak_one_sentence(phonemes)?;
         match self.output_config {
             Some(ref config) => config.apply(wave_samples),
             None => Ok(wave_samples),
@@ -217,7 +217,7 @@ impl Iterator for PiperSpeechStreamLazy {
 
     fn next(&mut self) -> Option<Self::Item> {
         let next_batch = self.sentence_phonemes.next()?;
-        match  self.provider.process_one_sentence(next_batch) {
+        match self.provider.process_one_sentence(next_batch) {
             Ok(ws) => Some(Ok(ws)),
             Err(e) => Some(Err(e)),
         }
@@ -231,7 +231,8 @@ pub struct PiperSpeechStreamParallel {
 
 impl PiperSpeechStreamParallel {
     fn new(provider: SpeechSynthesisTaskProvider) -> PiperResult<Self> {
-        let calculated_result: Vec<PiperWaveResult> = provider.get_phonemes()?
+        let calculated_result: Vec<PiperWaveResult> = provider
+            .get_phonemes()?
             .par_iter()
             .map(|ph| provider.process_one_sentence(ph.to_string()))
             .collect();
@@ -287,25 +288,22 @@ impl Iterator for PiperSpeechStreamBatched {
     }
 }
 
-struct SpeechSynthesisTask(Arc<OnceCell<Vec<PiperWaveResult>>>);
+struct SpeechSynthesisTask(Arc<OnceCell<PiperWaveResult>>);
 
 impl SpeechSynthesisTask {
-    fn new(provider: Arc<SpeechSynthesisTaskProvider>, batch: Vec<String>) -> Self {
+    fn new(provider: Arc<SpeechSynthesisTaskProvider>, phonemes: String) -> Self {
         let instance = Self(Arc::new(OnceCell::new()));
         let result = Arc::clone(&instance.0);
         SYNTHESIS_THREAD_POOL.spawn_fifo(move || {
-            let wave_samples: Vec<PiperWaveResult> = batch
-                .par_iter()
-                .map(|ph| provider.process_one_sentence(ph.to_string()))
-                .collect();
-            result.set(wave_samples).unwrap();
+            let wave_result = provider.process_one_sentence(phonemes);
+            result.set(wave_result).unwrap();
         });
         instance
     }
-    fn get_result(self) -> PiperResult<Vec<PiperWaveResult>> {
+    fn get_result(self) -> PiperWaveResult {
         self.0.wait();
         if let Ok(result) = Arc::try_unwrap(self.0) {
-            Ok(result.into_inner().unwrap())
+            result.into_inner().unwrap()
         } else {
             Err(PiperError::OperationError(
                 "Failed to obtain results".to_string(),
@@ -316,35 +314,21 @@ impl SpeechSynthesisTask {
 
 struct SpeechSynthesisChannel {
     task_queue: VecDeque<SpeechSynthesisTask>,
-    result_queue: VecDeque<PiperWaveResult>,
 }
 
 impl SpeechSynthesisChannel {
     fn new(batch_size: usize) -> PiperResult<Self> {
         Ok(Self {
-            result_queue: VecDeque::with_capacity(batch_size * 4),
             task_queue: VecDeque::with_capacity(batch_size * 4),
         })
     }
     fn put(&mut self, provider: Arc<SpeechSynthesisTaskProvider>, batch: Vec<String>) {
-        self.task_queue
-            .push_back(SpeechSynthesisTask::new(provider, batch));
+        for phonemes in batch.into_iter() {
+            self.task_queue
+                .push_back(SpeechSynthesisTask::new(Arc::clone(&provider), phonemes));
+        }
     }
     fn get(&mut self) -> Option<PiperWaveResult> {
-        if let Some(result) = self.result_queue.pop_front() {
-            return Some(result);
-        }
-        if let Some(task) = self.task_queue.pop_front() {
-            let results = match task.get_result() {
-                Ok(res) => res,
-                Err(e) => return Some(Err(e)),
-            };
-            for audio in results {
-                self.result_queue.push_back(audio);
-            }
-            self.get()
-        } else {
-            None
-        }
+        self.task_queue.pop_front().map(|task| task.get_result())
     }
 }

@@ -3,7 +3,9 @@ use ndarray::{Array1, Array2, CowArray};
 use ndarray_stats::QuantileExt;
 use once_cell::sync::{Lazy, OnceCell};
 use ort::{tensor::OrtOwnedTensor, Environment, GraphOptimizationLevel, SessionBuilder, Value};
-use piper_core::{Phonemes, PiperError, PiperModel, PiperResult, PiperWaveInfo, PiperWaveSamples};
+use piper_core::{
+    Phonemes, PiperError, PiperModel, PiperResult, PiperWaveInfo, PiperWaveResult, PiperWaveSamples,
+};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
@@ -59,6 +61,7 @@ pub struct SynthesisConfig {
 pub struct VitsModel {
     synth_config: RwLock<SynthesisConfig>,
     config: ModelConfig,
+    speaker_map: HashMap<i64, String>,
     onnx_path: PathBuf,
     ort_env: &'static Arc<Environment>,
     session: OnceCell<Result<ort::Session, ort::OrtError>>,
@@ -71,19 +74,22 @@ impl VitsModel {
         ort_env: &'static Arc<ort::Environment>,
     ) -> PiperResult<Self> {
         match Self::load_model_config(&config_path) {
-            Ok((config, synth_config)) => Ok(Self {
-                synth_config: RwLock::new(synth_config),
-                config,
-                onnx_path,
-                ort_env,
-                session: OnceCell::new(),
-            }),
+            Ok((config, synth_config)) => {
+                let speaker_map = reversed_mapping(&config.speaker_id_map);
+                Ok(Self {
+                    synth_config: RwLock::new(synth_config),
+                    config,
+                    speaker_map,
+                    onnx_path,
+                    ort_env,
+                    session: OnceCell::new(),
+                })
+            }
             Err(error) => Err(error),
         }
     }
-    pub fn speakers(&self) -> PiperResult<Vec<String>> {
-        let speaker_ids = Vec::from_iter(self.config.speaker_id_map.keys().cloned());
-        Ok(speaker_ids)
+    pub fn speakers(&self) -> PiperResult<HashMap<i64, String>> {
+        Ok(self.speaker_map.clone())
     }
     pub fn get_speaker(&self) -> PiperResult<Option<String>> {
         if self.config.num_speakers == 0 {
@@ -94,7 +100,11 @@ impl VitsModel {
         if let Some(ref speaker) = self.synth_config.read().unwrap().speaker {
             Ok(Some(speaker.0.clone()))
         } else {
-            Ok(None)
+            let default_speaker = match self.speaker_map.get(&0) {
+                Some(name) => name.clone(),
+                None => "Default".to_string(),
+            };
+            Ok(Some(default_speaker))
         }
     }
     pub fn set_speaker(&self, name: String) -> PiperResult<()> {
@@ -260,7 +270,95 @@ impl VitsModel {
             )
         })))
     }
+    fn infer_with_values(&self, input_phonemes: Vec<i64>) -> PiperWaveResult {
+        let session = match self.get_or_create_inference_session() {
+            Ok(ref session) => session,
+            Err(err) => {
+                return Err(PiperError::OperationError(format!(
+                    "Failed to initialize onnxruntime inference session: `{}`",
+                    err
+                )))
+            }
+        };
 
+        let synth_config = self.synth_config.read().unwrap();
+
+        let input_len = input_phonemes.len();
+        let phoneme_inputs =
+            CowArray::from(Array2::<i64>::from_shape_vec((1, input_len), input_phonemes).unwrap())
+                .into_dyn();
+
+        let input_lengths = CowArray::from(Array1::<i64>::from_iter([input_len as i64])).into_dyn();
+
+        let scales = Array1::<f32>::from_iter([
+            synth_config.noise_scale,
+            synth_config.length_scale,
+            synth_config.noise_w,
+        ]);
+        let scales = CowArray::from(scales).into_dyn();
+
+        let speaker_id = if self.config.num_speakers > 1 {
+            let sid = match synth_config.speaker {
+                Some((_, sid)) => sid,
+                None => 0,
+            };
+            Some(CowArray::from(Array1::<i64>::from_iter([sid])).into_dyn())
+        } else {
+            None
+        };
+
+        let timer = std::time::Instant::now();
+        let outputs: Vec<Value> = {
+            let mut inputs = vec![
+                Value::from_array(session.allocator(), &phoneme_inputs).unwrap(),
+                Value::from_array(session.allocator(), &input_lengths).unwrap(),
+                Value::from_array(session.allocator(), &scales).unwrap(),
+            ];
+            if let Some(ref sid_tensor) = speaker_id {
+                inputs.push(Value::from_array(session.allocator(), sid_tensor).unwrap());
+            }
+            match session.run(inputs) {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(PiperError::OperationError(format!(
+                        "Failed to run model inference. Error: {}",
+                        e
+                    )))
+                }
+            }
+        };
+        let inference_ms = timer.elapsed().as_millis() as f32;
+
+        let outputs: OrtOwnedTensor<f32, _> = match outputs[0].try_extract() {
+            Ok(out) => out,
+            Err(e) => {
+                return Err(PiperError::OperationError(format!(
+                    "Failed to run model inference. Error: {}",
+                    e
+                )))
+            }
+        };
+
+        let audio_output = outputs.view();
+
+        let Ok(min_audio_value) = audio_output.min() else {
+            return Err(PiperError::OperationError("Invalid output from model inference.".to_string()))
+        };
+        let Ok(max_audio_value) = audio_output.max() else {
+            return Err(PiperError::OperationError("Invalid output from model inference. ".to_string()))
+        };
+        let abs_max = max_audio_value.max(min_audio_value.abs());
+        let audio_scale = MAX_WAV_VALUE / abs_max.max(0.01f32);
+        let samples: Vec<i16> = audio_output
+            .iter()
+            .map(|i| (i * audio_scale).clamp(i16::MIN as f32, i16::MAX as f32) as i16)
+            .collect::<Vec<i16>>();
+        Ok(PiperWaveSamples::new(
+            samples,
+            self.config.audio.sample_rate as usize,
+            Some(inference_ms),
+        ))
+    }
     fn phonemes_to_input_ids(
         &self,
         phonemes: &str,
@@ -413,7 +511,7 @@ impl PiperModel for VitsModel {
             .unwrap()
             .first()
             .unwrap();
-        let phonemes = self.phonemes_to_input_ids(&batch, pad_id, bos_id, eos_id);
+        let phonemes = self.phonemes_to_input_ids(&phonemes, pad_id, bos_id, eos_id);
         self.infer_with_values(phonemes)
     }
 
@@ -424,4 +522,12 @@ impl PiperModel for VitsModel {
             sample_width: 2usize,
         })
     }
+}
+
+fn reversed_mapping<K, V>(input: &HashMap<K, V>) -> HashMap<V, K>
+where
+    K: ToOwned<Owned = K>,
+    V: ToOwned<Owned = V> + std::hash::Hash + std::cmp::Eq,
+{
+    HashMap::from_iter(input.iter().map(|(k, v)| (v.to_owned(), k.to_owned())))
 }

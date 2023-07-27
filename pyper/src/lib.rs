@@ -9,6 +9,7 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::create_exception;
 use pyo3::types::PyBytes;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -246,7 +247,7 @@ impl PyVitsModel {
         Ok(Self(Arc::new(vits)))
     }
     #[getter]
-    fn speakers(&self) -> PyPiperResult<Vec<String>> {
+    fn speakers(&self) -> PyPiperResult<HashMap<i64, String>> {
         Ok(self.0.speakers()?)
     }
     #[getter]

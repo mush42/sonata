@@ -276,7 +276,7 @@ dependencies = [
 
 [[package]]
 name = "espeak-phonemizer"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "ffi-support",
  "once_cell",
@@ -672,7 +672,7 @@ dependencies = [
 
 [[package]]
 name = "piper-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "once_cell",
  "wave-writer",
@@ -680,7 +680,7 @@ dependencies = [
 
 [[package]]
 name = "piper-synth"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "num_cpus",
  "once_cell",
@@ -692,7 +692,7 @@ dependencies = [
 
 [[package]]
 name = "piper-vits"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "espeak-phonemizer",
  "ndarray",
@@ -782,7 +782,7 @@ dependencies = [
 
 [[package]]
 name = "pyper"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "once_cell",
  "ort",
@@ -980,7 +980,7 @@ checksum = "a507befe795404456341dfab10cef66ead4c041f62b8b11bbb92bffe5d0953e0"
 
 [[package]]
 name = "sonic-sys"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bindgen",
  "cc",
@@ -1138,7 +1138,7 @@ checksum = "9c8d87e72b64a3b4db28d11ce29237c246188f4f51057d65a7eab63b7987e423"
 
 [[package]]
 name = "wave-writer"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "riff-wave",
 ]
