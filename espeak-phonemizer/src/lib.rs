@@ -130,7 +130,7 @@ mod tests {
     fn test_basic_en() -> ESpeakResult<()> {
         let text = "test";
         let expected = "tˈɛst.";
-        let phonemes = text_to_phonemes(text, "en-US", None)?.to_string();
+        let phonemes = text_to_phonemes(text, "en-US", None)?.join("");
         assert_eq!(phonemes, expected);
         Ok(())
     }
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn test_it_splits_sentences() -> ESpeakResult<()> {
         let phonemes = text_to_phonemes(TEXT_ALICE, "en-US", None)?;
-        assert_eq!(phonemes.sentences().len(), 3);
+        assert_eq!(phonemes.len(), 3);
         Ok(())
     }
 
@@ -148,14 +148,14 @@ mod tests {
         let expected = "t_ˈɛ_s_t.";
         let phonemes = text_to_phonemes(text, "en-US", Some('_'))
             .unwrap()
-            .to_string();
+            .join("");
         assert_eq!(phonemes, expected);
         Ok(())
     }
 
     #[test]
     fn test_it_preserves_clause_breakers() -> ESpeakResult<()> {
-        let phonemes = text_to_phonemes(TEXT_ALICE, "en-US", None)?.to_string();
+        let phonemes = text_to_phonemes(TEXT_ALICE, "en-US", None)?.join("");
         let clause_breakers = ['.', ',', '?', '!'];
         for c in clause_breakers {
             assert_eq!(
@@ -172,7 +172,7 @@ mod tests {
     fn test_arabic() -> ESpeakResult<()> {
         let text = "مَرْحَبَاً بِكَ أَيُّهَا الْرَّجُلْ";
         let expected = "mˈarħabˌaː bikˌa ʔaˈiːuhˌaː alrrˈadʒul.";
-        let phonemes = text_to_phonemes(text, "ar", None)?.to_string();
+        let phonemes = text_to_phonemes(text, "ar", None)?.join("");
         assert_eq!(phonemes, expected);
         Ok(())
     }
