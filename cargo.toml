@@ -4,7 +4,7 @@ members = [
     "piper/core",
     "piper/synth",
     "piper/models/vits",
-    "piper/piper",
+    "cli",
     "pyper",
     "espeak-phonemizer",
     "sonic-sys",

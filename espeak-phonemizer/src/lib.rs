@@ -2,6 +2,7 @@ mod espeakng;
 
 use ffi_support::{rust_string_to_c, FfiStr};
 use once_cell::sync::Lazy;
+use regex::Regex;
 use std::env;
 use std::error::Error;
 use std::ffi;
@@ -15,7 +16,6 @@ const CLAUSE_INTONATION_COMMA: i32 = 0x00001000;
 const CLAUSE_INTONATION_QUESTION: i32 = 0x00002000;
 const CLAUSE_INTONATION_EXCLAMATION: i32 = 0x00003000;
 const CLAUSE_TYPE_SENTENCE: i32 = 0x00080000;
-
 /// Name of the environment variable that points to the directory that contains `espeak-ng-data` directory
 /// only needed if `espeak-ng-data` directory is not in the expected location (i.e. eSpeak-ng is not installed system wide)
 const PIPER_ESPEAKNG_DATA_DIRECTORY: &str = "PIPER_ESPEAKNG_DATA_DIRECTORY";
@@ -31,6 +31,8 @@ impl fmt::Display for ESpeakError {
     }
 }
 
+static LANG_SWITCH_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"\([^)]*\)").unwrap());
+static STRESS_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"[ˈˌ]").unwrap());
 static ESPEAKNG_INIT: Lazy<ESpeakResult<()>> = Lazy::new(|| {
     let data_dir = match env::var(PIPER_ESPEAKNG_DATA_DIRECTORY) {
         Ok(directory) => PathBuf::from(directory),
@@ -64,6 +66,8 @@ pub fn text_to_phonemes(
     text: &str,
     language: &str,
     phoneme_separator: Option<char>,
+    remove_lang_switch_flags: bool,
+    remove_stress: bool,
 ) -> ESpeakResult<Vec<String>> {
     if let Err(ref e) = Lazy::force(&ESPEAKNG_INIT) {
         return Err(e.clone());
@@ -114,6 +118,20 @@ pub fn text_to_phonemes(
     if !phonemes.is_empty() {
         sent_phonemes.push(std::mem::take(&mut phonemes));
     }
+    if remove_lang_switch_flags {
+        sent_phonemes = Vec::from_iter(
+            sent_phonemes
+                .into_iter()
+                .map(|sent| LANG_SWITCH_PATTERN.replace_all(&sent, "").into_owned()),
+        );
+    }
+    if remove_stress {
+        sent_phonemes = Vec::from_iter(
+            sent_phonemes
+                .into_iter()
+                .map(|sent| STRESS_PATTERN.replace_all(&sent, "").into_owned()),
+        );
+    }
     Ok(sent_phonemes)
 }
 
@@ -130,14 +148,14 @@ mod tests {
     fn test_basic_en() -> ESpeakResult<()> {
         let text = "test";
         let expected = "tˈɛst.";
-        let phonemes = text_to_phonemes(text, "en-US", None)?.join("");
+        let phonemes = text_to_phonemes(text, "en-US", None, false, false)?.join("");
         assert_eq!(phonemes, expected);
         Ok(())
     }
 
     #[test]
     fn test_it_splits_sentences() -> ESpeakResult<()> {
-        let phonemes = text_to_phonemes(TEXT_ALICE, "en-US", None)?;
+        let phonemes = text_to_phonemes(TEXT_ALICE, "en-US", None, false, false)?;
         assert_eq!(phonemes.len(), 3);
         Ok(())
     }
@@ -146,7 +164,7 @@ mod tests {
     fn test_it_adds_phoneme_separator() -> ESpeakResult<()> {
         let text = "test";
         let expected = "t_ˈɛ_s_t.";
-        let phonemes = text_to_phonemes(text, "en-US", Some('_'))
+        let phonemes = text_to_phonemes(text, "en-US", Some('_'), false, false)
             .unwrap()
             .join("");
         assert_eq!(phonemes, expected);
@@ -155,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_it_preserves_clause_breakers() -> ESpeakResult<()> {
-        let phonemes = text_to_phonemes(TEXT_ALICE, "en-US", None)?.join("");
+        let phonemes = text_to_phonemes(TEXT_ALICE, "en-US", None, false, false)?.join("");
         let clause_breakers = ['.', ',', '?', '!'];
         for c in clause_breakers {
             assert_eq!(
@@ -172,8 +190,36 @@ mod tests {
     fn test_arabic() -> ESpeakResult<()> {
         let text = "مَرْحَبَاً بِكَ أَيُّهَا الْرَّجُلْ";
         let expected = "mˈarħabˌaː bikˌa ʔaˈiːuhˌaː alrrˈadʒul.";
-        let phonemes = text_to_phonemes(text, "ar", None)?.join("");
+        let phonemes = text_to_phonemes(text, "ar", None, false, false)?.join("");
         assert_eq!(phonemes, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_lang_switch_flags() -> ESpeakResult<()> {
+        let text = "Hello معناها مرحباً";
+
+        let with_lang_switch = text_to_phonemes(text, "ar", None, false, false)?.join("");
+        assert_eq!(with_lang_switch.contains("(en)"), true);
+        assert_eq!(with_lang_switch.contains("(ar)"), true);
+
+        let without_lang_switch = text_to_phonemes(text, "ar", None, true, false)?.join("");
+        assert_eq!(without_lang_switch.contains("(en)"), false);
+        assert_eq!(without_lang_switch.contains("(ar)"), false);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_stress() -> ESpeakResult<()> {
+        let stress_markers = ['ˈ', 'ˌ'];
+
+        let with_stress = text_to_phonemes(TEXT_ALICE, "en-US", None, false, false)?.join("");
+        assert_eq!(with_stress.contains(stress_markers), true);
+
+        let without_stress = text_to_phonemes(TEXT_ALICE, "en-US", None, false, true)?.join("");
+        assert_eq!(without_stress.contains(stress_markers), false);
+
         Ok(())
     }
 }
