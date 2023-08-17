@@ -447,7 +447,7 @@ impl VitsModel {
 
 impl PiperModel for VitsModel {
     fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes> {
-        let phonemes = match text_to_phonemes(text, &self.config.espeak.voice, None) {
+        let phonemes = match text_to_phonemes(text, &self.config.espeak.voice, None, true, false) {
             Ok(ph) => ph,
             Err(e) => {
                 return Err(PiperError::PhonemizationError(format!(
