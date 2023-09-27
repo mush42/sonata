@@ -17,6 +17,7 @@ const BOS: char = '^';
 const EOS: char = '$';
 const PAD: char = '_';
 
+#[allow(dead_code)]
 static CPU_COUNT: Lazy<i16> = Lazy::new(|| num_cpus::get().try_into().unwrap_or(4));
 
 #[derive(Deserialize, Default)]
@@ -380,12 +381,9 @@ impl VitsModel {
     fn get_or_create_inference_session(&self) -> &Result<ort::Session, ort::OrtError> {
         self.session.get_or_init(|| {
             SessionBuilder::new(self.ort_env)?
-                .with_optimization_level(GraphOptimizationLevel::Level3)?
-                .with_allocator(ort::AllocatorType::Arena)?
-                .with_memory_pattern(true)?
-                .with_parallel_execution(true)?
-                .with_inter_threads(*CPU_COUNT / 2)?
-                .with_intra_threads(*CPU_COUNT / 2)?
+                .with_optimization_level(GraphOptimizationLevel::Disable)?
+                .with_memory_pattern(false)?
+                .with_parallel_execution(false)?
                 .with_model_from_file(&self.onnx_path)
         })
     }
