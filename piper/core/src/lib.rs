@@ -114,9 +114,7 @@ impl PiperWaveSamples {
     }
 
     pub fn real_time_factor(&self) -> Option<f32> {
-        let Some(infer_ms) = self.inference_ms else {
-             return None
-         };
+        let infer_ms= self.inference_ms?;
         let audio_duration = self.duration_ms();
         if audio_duration == 0.0 {
             return Some(0.0f32);

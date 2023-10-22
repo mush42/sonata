@@ -1,4 +1,5 @@
 use espeak_phonemizer::text_to_phonemes;
+use libtashkeel_base::do_tashkeel;
 use ndarray::{Array1, Array2, CowArray};
 use ndarray_stats::QuantileExt;
 use once_cell::sync::{Lazy, OnceCell};
@@ -7,6 +8,7 @@ use piper_core::{
     Phonemes, PiperError, PiperModel, PiperResult, PiperWaveInfo, PiperWaveResult, PiperWaveSamples,
 };
 use serde::Deserialize;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::PathBuf;
@@ -23,6 +25,7 @@ static CPU_COUNT: Lazy<i16> = Lazy::new(|| num_cpus::get().try_into().unwrap_or(
 #[derive(Deserialize, Default)]
 pub struct AudioConfig {
     pub sample_rate: u32,
+    pub quality: Option<String>
 }
 
 #[derive(Deserialize, Default)]
@@ -37,8 +40,24 @@ pub struct InferenceConfig {
     noise_w: f32,
 }
 
+#[derive(Clone, Deserialize, Default)]
+pub struct Language {
+    code: String,
+    #[allow(dead_code)]
+    family: String,
+    #[allow(dead_code)]
+    region: String,
+    #[allow(dead_code)]
+    name_native: Option<String>,
+    #[allow(dead_code)]
+    name_english: Option<String>,
+}
+
+
 #[derive(Deserialize, Default)]
 pub struct ModelConfig {
+    pub key: Option<String>,
+    pub language: Option<Language>,
     pub audio: AudioConfig,
     pub num_speakers: u32,
     pub speaker_id_map: HashMap<String, i64>,
@@ -53,10 +72,10 @@ pub struct ModelConfig {
 
 #[derive(Debug, Clone, Default)]
 pub struct SynthesisConfig {
-    speaker: Option<(String, i64)>,
-    noise_scale: f32,
-    length_scale: f32,
-    noise_w: f32,
+    pub speaker: Option<(String, i64)>,
+    pub noise_scale: f32,
+    pub length_scale: f32,
+    pub noise_w: f32,
 }
 
 pub struct VitsModel {
@@ -66,6 +85,7 @@ pub struct VitsModel {
     onnx_path: PathBuf,
     ort_env: &'static Arc<Environment>,
     session: OnceCell<Result<ort::Session, ort::OrtError>>,
+    tashkeel_engine: Option<libtashkeel_base::DynamicInferenceEngine>,
 }
 
 impl VitsModel {
@@ -77,6 +97,19 @@ impl VitsModel {
         match Self::load_model_config(&config_path) {
             Ok((config, synth_config)) => {
                 let speaker_map = reversed_mapping(&config.speaker_id_map);
+                let tashkeel_engine = if config.espeak.voice == "ar" {
+                    match libtashkeel_base::create_inference_engine(None) {
+                        Ok(engine) => Some(engine),
+                        Err(msg) => {
+                            return Err(PiperError::OperationError(format!(
+                                "Failed to create inference engine for libtashkeel. {}",
+                                msg
+                            )))
+                        }
+                    }
+                } else {
+                    None
+                };
                 Ok(Self {
                     synth_config: RwLock::new(synth_config),
                     config,
@@ -84,9 +117,29 @@ impl VitsModel {
                     onnx_path,
                     ort_env,
                     session: OnceCell::new(),
+                    tashkeel_engine,
                 })
             }
             Err(error) => Err(error),
+        }
+    }
+    pub fn language(&self) -> Option<String> {
+        self.config.language.as_ref().map(|lang| lang.code.clone())
+    }
+    pub fn quality(&self) -> Option<String> {
+        self.config.audio.quality.as_ref().cloned()
+    }
+    pub fn default_synthesis_config(&self) -> SynthesisConfig {
+        let speaker = if self.config.num_speakers > 0 {
+            self.speaker_map.get(&0).as_ref().cloned().map(|name| (name.clone(), 0))
+        } else {
+            None
+        };
+        SynthesisConfig {
+            speaker,
+            length_scale: self.config.inference.length_scale,
+            noise_scale: self.config.inference.noise_scale,
+            noise_w: self.config.inference.noise_w,
         }
     }
     pub fn speakers(&self) -> PiperResult<HashMap<i64, String>> {
@@ -249,10 +302,14 @@ impl VitsModel {
         let mut samples: Vec<Vec<i16>> = Vec::with_capacity(num_batches);
         for audio in audio_outputs.rows().into_iter() {
             let Ok(min_audio_value) = audio.min() else {
-                return Err(PiperError::OperationError("Invalid output from model inference.".to_string()))
+                return Err(PiperError::OperationError(
+                    "Invalid output from model inference.".to_string(),
+                ));
             };
             let Ok(max_audio_value) = audio.max() else {
-                return Err(PiperError::OperationError("Invalid output from model inference. ".to_string()))
+                return Err(PiperError::OperationError(
+                    "Invalid output from model inference. ".to_string(),
+                ));
             };
             let abs_max = max_audio_value.max(min_audio_value.abs());
             let audio_scale = MAX_WAV_VALUE / abs_max.max(0.01f32);
@@ -343,10 +400,14 @@ impl VitsModel {
         let audio_output = outputs.view();
 
         let Ok(min_audio_value) = audio_output.min() else {
-            return Err(PiperError::OperationError("Invalid output from model inference.".to_string()))
+            return Err(PiperError::OperationError(
+                "Invalid output from model inference.".to_string(),
+            ));
         };
         let Ok(max_audio_value) = audio_output.max() else {
-            return Err(PiperError::OperationError("Invalid output from model inference. ".to_string()))
+            return Err(PiperError::OperationError(
+                "Invalid output from model inference. ".to_string(),
+            ));
         };
         let abs_max = max_audio_value.max(min_audio_value.abs());
         let audio_scale = MAX_WAV_VALUE / abs_max.max(0.01f32);
@@ -441,11 +502,30 @@ impl VitsModel {
         };
         Ok((model_config, synth_config))
     }
+    fn diacritize_text(&self, text: &str) -> PiperResult<String> {
+        let diacritized_text = match do_tashkeel(self.tashkeel_engine.as_ref().unwrap(), text, None)
+        {
+            Ok(d_text) => d_text,
+            Err(msg) => {
+                return Err(PiperError::OperationError(format!(
+                    "Failed to diacritize text using  libtashkeel. {}",
+                    msg
+                )))
+            }
+        };
+        Ok(diacritized_text)
+    }
 }
 
 impl PiperModel for VitsModel {
     fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes> {
-        let phonemes = match text_to_phonemes(text, &self.config.espeak.voice, None, true, false) {
+        let text = if self.config.espeak.voice == "ar" {
+            let diacritized = self.diacritize_text(text)?;
+            Cow::from(diacritized)
+        } else {
+            Cow::from(text)
+        };
+        let phonemes = match text_to_phonemes(&text, &self.config.espeak.voice, None, true, false) {
             Ok(ph) => ph,
             Err(e) => {
                 return Err(PiperError::PhonemizationError(format!(
