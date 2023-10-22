@@ -18,6 +18,6 @@ version = "0.19.2"
 features = ["extension-module", "abi3-py37"]
 
 [dependencies.ort]
-version = "1.16.0"
+version = "1.16.2"
 default-features = false
 features = ["load-dynamic",]

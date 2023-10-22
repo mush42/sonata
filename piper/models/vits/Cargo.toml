@@ -15,6 +15,6 @@ num_cpus = "1.15.0"
 libtashkeel_base = { version = "1.2.0", default-features = false, features = ["ort"] }
 
 [dependencies.ort]
-version = "1.16.0"
+version = "1.16.2"
 default-features = false
 features = ["load-dynamic"]
