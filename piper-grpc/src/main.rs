@@ -4,6 +4,7 @@ use piper_core::{PiperError, PiperModel, PiperResult};
 use piper_synth::{AudioOutputConfig, PiperSpeechStreamBatched, PiperSpeechSynthesizer};
 use piper_vits::VitsModel;
 use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
@@ -13,6 +14,8 @@ use tonic::{Request, Response, Status};
 use xxhash_rust::xxh3::xxh3_64;
 
 type PiperGrpcResult<T> = Result<T, PiperGrpcError>;
+
+const DEFAULT_PIPER_GRPC_SERVER_PORT: u16 = 49314;
 static ORT_ENVIRONMENT: OnceCell<Arc<ort::Environment>> = OnceCell::new();
 
 pub mod pgrpc {
@@ -110,7 +113,11 @@ impl PiperGrpcService {
         }
         let vits_model =
             VitsModel::new(config_path, onnx_path.clone(), Self::get_ort_environment())?;
-        log::info!("Loaded voice from: `{}`. Voice ID: {}", onnx_path.display(), voice_id);
+        log::info!(
+            "Loaded voice from: `{}`. Voice ID: {}",
+            onnx_path.display(),
+            voice_id
+        );
         let voice_info = self._get_voice_info(voice_id.clone(), &vits_model)?;
         let voice = Voice::new(vits_model)?;
         (self.0.write().unwrap()).insert(voice_id, voice);
@@ -344,7 +351,10 @@ fn setup_logging() {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     setup_logging();
 
-    let addr = "127.0.0.1:49314".parse().unwrap();
+    let port = std::env::var("PIPER_GRPC_SERVER_PORT")
+        .map(|val| val.parse().unwrap_or(DEFAULT_PIPER_GRPC_SERVER_PORT))
+        .unwrap_or(DEFAULT_PIPER_GRPC_SERVER_PORT);
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
 
     let service = PiperGrpcService::new();
     let server = PiperGrpcServer::new(service);
