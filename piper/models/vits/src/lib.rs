@@ -44,9 +44,9 @@ pub struct InferenceConfig {
 pub struct Language {
     code: String,
     #[allow(dead_code)]
-    family: String,
+    family: Option<String>,
     #[allow(dead_code)]
-    region: String,
+    region: Option<String>,
     #[allow(dead_code)]
     name_native: Option<String>,
     #[allow(dead_code)]
