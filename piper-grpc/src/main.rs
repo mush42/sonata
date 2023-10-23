@@ -326,7 +326,7 @@ impl PiperGrpc for PiperGrpcService {
                     Err(e) => {
                         let err = Err(PiperGrpcError::from(e).into());
                         tx.send(err).await.ok();
-                        // Stop this stream here. No retrys ??
+                        // Stop this stream here. No retrys
                         return;
                     }
                 };
@@ -334,7 +334,7 @@ impl PiperGrpc for PiperGrpcService {
                     wav_samples: wav.as_wave_bytes(),
                     rtf: wav.real_time_factor().unwrap_or_default(),
                 };
-                // We can do nothing about this error 🤷
+                // We can do nothing about this error
                 tx.send(Ok(synth_result)).await.ok();
             }
         });
