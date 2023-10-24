@@ -16,6 +16,7 @@ use xxhash_rust::xxh3::xxh3_64;
 type PiperGrpcResult<T> = Result<T, PiperGrpcError>;
 
 const DEFAULT_PIPER_GRPC_SERVER_PORT: u16 = 49314;
+const VOICE_ID_REDUCTION_FACTOR: u64 = 10000000000000;
 static ORT_ENVIRONMENT: OnceCell<Arc<ort::Environment>> = OnceCell::new();
 
 pub mod pgrpc {
@@ -101,7 +102,7 @@ impl PiperGrpcService {
                 .unwrap()
                 .to_string_lossy()
                 .into_owned();
-            xxh3_64(voice_path.as_bytes()).to_string()
+            (xxh3_64(voice_path.as_bytes()) / VOICE_ID_REDUCTION_FACTOR).to_string()
         } else {
             return Err(PiperGrpcError::VoiceNotFound(format!(
                 "ONNX file does not exists: `{}`",
