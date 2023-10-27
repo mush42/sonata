@@ -22,6 +22,45 @@ const PAD: char = '_';
 #[allow(dead_code)]
 static CPU_COUNT: Lazy<i16> = Lazy::new(|| num_cpus::get().try_into().unwrap_or(4));
 
+fn reversed_mapping<K, V>(input: &HashMap<K, V>) -> HashMap<V, K>
+where
+    K: ToOwned<Owned = K>,
+    V: ToOwned<Owned = V> + std::hash::Hash + std::cmp::Eq,
+{
+    HashMap::from_iter(input.iter().map(|(k, v)| (v.to_owned(), k.to_owned())))
+}
+
+
+fn load_model_config(config_path: &PathBuf) -> PiperResult<(ModelConfig, SynthesisConfig)> {
+    let file = match File::open(config_path) {
+        Ok(file) => file,
+        Err(why) => {
+            return Err(PiperError::FailedToLoadResource(format!(
+                "Faild to load model config: `{}`. Caused by: `{}`",
+                config_path.display(),
+                why
+            )))
+        }
+    };
+    let model_config: ModelConfig = match serde_json::from_reader(file) {
+        Ok(config) => config,
+        Err(why) => {
+            return Err(PiperError::FailedToLoadResource(format!(
+                "Faild to parse model config from file: `{}`. Caused by: `{}`",
+                config_path.display(),
+                why
+            )))
+        }
+    };
+    let synth_config = SynthesisConfig {
+        speaker: None,
+        noise_scale: model_config.inference.noise_scale,
+        length_scale: model_config.inference.length_scale,
+        noise_w: model_config.inference.noise_w,
+    };
+    Ok((model_config, synth_config))
+}
+
 #[derive(Deserialize, Default)]
 pub struct AudioConfig {
     pub sample_rate: u32,
@@ -78,6 +117,173 @@ pub struct SynthesisConfig {
     pub noise_w: f32,
 }
 
+pub trait VitsModelCommons {
+    fn get_synth_config(&self) -> &RwLock<SynthesisConfig>;
+    fn get_config(&self) -> &ModelConfig;
+    fn get_speaker_map(&self) -> &HashMap<i64, String>;
+    fn get_tashkeel_engine(&self) -> Option<&libtashkeel_base::DynamicInferenceEngine>;
+
+    fn get_meta_ids(&self) -> (i64, i64, i64) {
+        let config = self.get_config();
+        let pad_id = *config
+            .phoneme_id_map
+            .get(&PAD)
+            .unwrap()
+            .first()
+            .unwrap();
+        let bos_id = *config
+            .phoneme_id_map
+            .get(&BOS)
+            .unwrap()
+            .first()
+            .unwrap();
+        let eos_id = *config
+            .phoneme_id_map
+            .get(&EOS)
+            .unwrap()
+            .first()
+            .unwrap();
+        (pad_id, bos_id, eos_id)
+    }
+    fn language(&self) -> Option<String> {
+        self.get_config().language.as_ref().map(|lang| lang.code.clone())
+    }
+    fn quality(&self) -> Option<String> {
+        self.get_config().audio.quality.as_ref().cloned()
+    }
+    fn default_synthesis_config(&self) -> SynthesisConfig {
+        let config = self.get_config();
+        
+        let speaker = if config.num_speakers > 0 {
+            self.get_speaker_map().get(&0).as_ref().cloned().map(|name| (name.clone(), 0))
+        } else {
+            None
+        };
+        SynthesisConfig {
+            speaker,
+            length_scale: config.inference.length_scale,
+            noise_scale: config.inference.noise_scale,
+            noise_w: config.inference.noise_w,
+        }
+    }
+    fn speakers(&self) -> PiperResult<HashMap<i64, String>> {
+        Ok(self.get_speaker_map().clone())
+    }
+    fn get_speaker(&self) -> PiperResult<Option<String>> {
+        if self.get_config().num_speakers == 0 {
+            return Err(PiperError::OperationError(
+                "This model is a single speaker model.".to_string(),
+            ));
+        }
+        if let Some(ref speaker) = self.get_synth_config().read().unwrap().speaker {
+            Ok(Some(speaker.0.clone()))
+        } else {
+            let default_speaker = match self.get_speaker_map().get(&0) {
+                Some(name) => name.clone(),
+                None => "Default".to_string(),
+            };
+            Ok(Some(default_speaker))
+        }
+    }
+    fn set_speaker(&self, name: String) -> PiperResult<()> {
+        let config = self.get_config();
+        if config.num_speakers == 0 {
+            return Err(PiperError::OperationError(
+                "This model is a single speaker model.".to_string(),
+            ));
+        }
+        if let Some(sid) = config.speaker_id_map.get(&name) {
+            let mut synth_config = self.get_synth_config().write().unwrap();
+            synth_config.speaker = Some((name, *sid));
+            Ok(())
+        } else {
+            Err(PiperError::OperationError(format!(
+                "Invalid speaker name: `{}`",
+                name
+            )))
+        }
+    }
+    fn get_noise_scale(&self) -> PiperResult<f32> {
+        Ok(self.get_synth_config().read().unwrap().noise_scale)
+    }
+    fn set_noise_scale(&self, value: f32) -> PiperResult<()> {
+        self.get_synth_config().write().unwrap().noise_scale = value;
+        Ok(())
+    }
+    fn get_length_scale(&self) -> PiperResult<f32> {
+        Ok(self.get_synth_config().read().unwrap().length_scale)
+    }
+    fn set_length_scale(&self, value: f32) -> PiperResult<()> {
+        self.get_synth_config().write().unwrap().length_scale = value;
+        Ok(())
+    }
+    fn get_noise_w(&self) -> PiperResult<f32> {
+        Ok(self.get_synth_config().read().unwrap().noise_w)
+    }
+    fn set_noise_w(&self, value: f32) -> PiperResult<()> {
+        self.get_synth_config().write().unwrap().noise_w = value;
+        Ok(())
+    }
+    fn phonemes_to_input_ids(
+        &self,
+        phonemes: &str,
+        pad_id: i64,
+        bos_id: i64,
+        eos_id: i64,
+    ) -> Vec<i64> {
+        let config = self.get_config();
+        let mut phoneme_ids: Vec<i64> = Vec::with_capacity((phonemes.len() + 1) * 2);
+        phoneme_ids.push(bos_id);
+        for phoneme in phonemes.chars() {
+            if let Some(id) = config.phoneme_id_map.get(&phoneme) {
+                phoneme_ids.push(*id.first().unwrap());
+                phoneme_ids.push(pad_id);
+            }
+        }
+        phoneme_ids.push(eos_id);
+        phoneme_ids
+    }
+    fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes> {
+        let config = self.get_config();
+        let text = if config.espeak.voice == "ar" {
+            let diacritized = self.diacritize_text(text)?;
+            Cow::from(diacritized)
+        } else {
+            Cow::from(text)
+        };
+        let phonemes = match text_to_phonemes(&text, &config.espeak.voice, None, true, false) {
+            Ok(ph) => ph,
+            Err(e) => {
+                return Err(PiperError::PhonemizationError(format!(
+                    "Failed to phonemize given text using espeak-ng. Error: {}",
+                    e
+                )))
+            }
+        };
+        Ok(phonemes.into())
+    }
+    fn diacritize_text(&self, text: &str) -> PiperResult<String> {
+        let diacritized_text = match do_tashkeel(self.get_tashkeel_engine().unwrap(), text, None)
+        {
+            Ok(d_text) => d_text,
+            Err(msg) => {
+                return Err(PiperError::OperationError(format!(
+                    "Failed to diacritize text using  libtashkeel. {}",
+                    msg
+                )))
+            }
+        };
+        Ok(diacritized_text)
+    }
+    fn wave_info(&self) -> PiperResult<PiperWaveInfo> {
+        Ok(PiperWaveInfo {
+            sample_rate: self.get_config().audio.sample_rate as usize,
+            num_channels: 1usize,
+            sample_width: 2usize,
+        })
+    }
+}
+
 pub struct VitsModel {
     synth_config: RwLock<SynthesisConfig>,
     config: ModelConfig,
@@ -94,7 +300,7 @@ impl VitsModel {
         onnx_path: PathBuf,
         ort_env: &'static Arc<ort::Environment>,
     ) -> PiperResult<Self> {
-        match Self::load_model_config(&config_path) {
+        match load_model_config(&config_path) {
             Ok((config, synth_config)) => {
                 let speaker_map = reversed_mapping(&config.speaker_id_map);
                 let tashkeel_engine = if config.espeak.voice == "ar" {
@@ -122,82 +328,6 @@ impl VitsModel {
             }
             Err(error) => Err(error),
         }
-    }
-    pub fn language(&self) -> Option<String> {
-        self.config.language.as_ref().map(|lang| lang.code.clone())
-    }
-    pub fn quality(&self) -> Option<String> {
-        self.config.audio.quality.as_ref().cloned()
-    }
-    pub fn default_synthesis_config(&self) -> SynthesisConfig {
-        let speaker = if self.config.num_speakers > 0 {
-            self.speaker_map.get(&0).as_ref().cloned().map(|name| (name.clone(), 0))
-        } else {
-            None
-        };
-        SynthesisConfig {
-            speaker,
-            length_scale: self.config.inference.length_scale,
-            noise_scale: self.config.inference.noise_scale,
-            noise_w: self.config.inference.noise_w,
-        }
-    }
-    pub fn speakers(&self) -> PiperResult<HashMap<i64, String>> {
-        Ok(self.speaker_map.clone())
-    }
-    pub fn get_speaker(&self) -> PiperResult<Option<String>> {
-        if self.config.num_speakers == 0 {
-            return Err(PiperError::OperationError(
-                "This model is a single speaker model.".to_string(),
-            ));
-        }
-        if let Some(ref speaker) = self.synth_config.read().unwrap().speaker {
-            Ok(Some(speaker.0.clone()))
-        } else {
-            let default_speaker = match self.speaker_map.get(&0) {
-                Some(name) => name.clone(),
-                None => "Default".to_string(),
-            };
-            Ok(Some(default_speaker))
-        }
-    }
-    pub fn set_speaker(&self, name: String) -> PiperResult<()> {
-        if self.config.num_speakers == 0 {
-            return Err(PiperError::OperationError(
-                "This model is a single speaker model.".to_string(),
-            ));
-        }
-        if let Some(sid) = self.config.speaker_id_map.get(&name) {
-            let mut synth_config = self.synth_config.write().unwrap();
-            synth_config.speaker = Some((name, *sid));
-            Ok(())
-        } else {
-            Err(PiperError::OperationError(format!(
-                "Invalid speaker name: `{}`",
-                name
-            )))
-        }
-    }
-    pub fn get_noise_scale(&self) -> PiperResult<f32> {
-        Ok(self.synth_config.read().unwrap().noise_scale)
-    }
-    pub fn set_noise_scale(&self, value: f32) -> PiperResult<()> {
-        self.synth_config.write().unwrap().noise_scale = value;
-        Ok(())
-    }
-    pub fn get_length_scale(&self) -> PiperResult<f32> {
-        Ok(self.synth_config.read().unwrap().length_scale)
-    }
-    pub fn set_length_scale(&self, value: f32) -> PiperResult<()> {
-        self.synth_config.write().unwrap().length_scale = value;
-        Ok(())
-    }
-    pub fn get_noise_w(&self) -> PiperResult<f32> {
-        Ok(self.synth_config.read().unwrap().noise_w)
-    }
-    pub fn set_noise_w(&self, value: f32) -> PiperResult<()> {
-        self.synth_config.write().unwrap().noise_w = value;
-        Ok(())
     }
     fn infer_with_values_batched(
         &self,
@@ -322,7 +452,7 @@ impl VitsModel {
         }
         Ok(Vec::from_iter(samples.into_iter().map(|audio| {
             PiperWaveSamples::new(
-                audio,
+                audio.into(),
                 self.config.audio.sample_rate as usize,
                 Some(inference_ms),
             )
@@ -416,28 +546,10 @@ impl VitsModel {
             .map(|i| (i * audio_scale).clamp(i16::MIN as f32, i16::MAX as f32) as i16)
             .collect::<Vec<i16>>();
         Ok(PiperWaveSamples::new(
-            samples,
+            samples.into(),
             self.config.audio.sample_rate as usize,
             Some(inference_ms),
         ))
-    }
-    fn phonemes_to_input_ids(
-        &self,
-        phonemes: &str,
-        pad_id: i64,
-        bos_id: i64,
-        eos_id: i64,
-    ) -> Vec<i64> {
-        let mut phoneme_ids: Vec<i64> = Vec::with_capacity((phonemes.len() + 1) * 2);
-        phoneme_ids.push(bos_id);
-        for phoneme in phonemes.chars() {
-            if let Some(id) = self.config.phoneme_id_map.get(&phoneme) {
-                phoneme_ids.push(*id.first().unwrap());
-                phoneme_ids.push(pad_id);
-            }
-        }
-        phoneme_ids.push(eos_id);
-        phoneme_ids
     }
     fn get_or_create_inference_session(&self) -> &Result<ort::Session, ort::OrtError> {
         self.session.get_or_init(|| {
@@ -473,92 +585,31 @@ impl VitsModel {
             })
             .collect())
     }
-    fn load_model_config(config_path: &PathBuf) -> PiperResult<(ModelConfig, SynthesisConfig)> {
-        let file = match File::open(config_path) {
-            Ok(file) => file,
-            Err(why) => {
-                return Err(PiperError::FailedToLoadResource(format!(
-                    "Faild to load model config: `{}`. Caused by: `{}`",
-                    config_path.display(),
-                    why
-                )))
-            }
-        };
-        let model_config: ModelConfig = match serde_json::from_reader(file) {
-            Ok(config) => config,
-            Err(why) => {
-                return Err(PiperError::FailedToLoadResource(format!(
-                    "Faild to parse model config from file: `{}`. Caused by: `{}`",
-                    config_path.display(),
-                    why
-                )))
-            }
-        };
-        let synth_config = SynthesisConfig {
-            speaker: None,
-            noise_scale: model_config.inference.noise_scale,
-            length_scale: model_config.inference.length_scale,
-            noise_w: model_config.inference.noise_w,
-        };
-        Ok((model_config, synth_config))
+}
+
+
+impl VitsModelCommons for &VitsModel {
+    fn get_synth_config(&self) -> &RwLock<SynthesisConfig> {
+        &self.synth_config
     }
-    fn diacritize_text(&self, text: &str) -> PiperResult<String> {
-        let diacritized_text = match do_tashkeel(self.tashkeel_engine.as_ref().unwrap(), text, None)
-        {
-            Ok(d_text) => d_text,
-            Err(msg) => {
-                return Err(PiperError::OperationError(format!(
-                    "Failed to diacritize text using  libtashkeel. {}",
-                    msg
-                )))
-            }
-        };
-        Ok(diacritized_text)
+    fn get_config(&self) -> &ModelConfig {
+        &self.config
+    }
+    fn get_speaker_map(&self) -> &HashMap<i64, String> {
+        &self.speaker_map
+    }
+    fn get_tashkeel_engine(&self) -> Option<&libtashkeel_base::DynamicInferenceEngine> {
+        self.tashkeel_engine.as_ref()
     }
 }
 
 impl PiperModel for VitsModel {
     fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes> {
-        let text = if self.config.espeak.voice == "ar" {
-            let diacritized = self.diacritize_text(text)?;
-            Cow::from(diacritized)
-        } else {
-            Cow::from(text)
-        };
-        let phonemes = match text_to_phonemes(&text, &self.config.espeak.voice, None, true, false) {
-            Ok(ph) => ph,
-            Err(e) => {
-                return Err(PiperError::PhonemizationError(format!(
-                    "Failed to phonemize given text using espeak-ng. Error: {}",
-                    e
-                )))
-            }
-        };
-        Ok(phonemes.into())
+        VitsModelCommons::phonemize_text(&self, text)
     }
 
     fn speak_batch(&self, phoneme_batches: Vec<String>) -> PiperResult<Vec<PiperWaveSamples>> {
-        let pad_id = *self
-            .config
-            .phoneme_id_map
-            .get(&PAD)
-            .unwrap()
-            .first()
-            .unwrap();
-        let bos_id = *self
-            .config
-            .phoneme_id_map
-            .get(&BOS)
-            .unwrap()
-            .first()
-            .unwrap();
-        let eos_id = *self
-            .config
-            .phoneme_id_map
-            .get(&EOS)
-            .unwrap()
-            .first()
-            .unwrap();
+        let (pad_id, bos_id, eos_id) = self.get_meta_ids();
         let phoneme_batches = Vec::from_iter(
             phoneme_batches
                 .into_iter()
@@ -568,44 +619,12 @@ impl PiperModel for VitsModel {
     }
 
     fn speak_one_sentence(&self, phonemes: String) -> PiperWaveResult {
-        let pad_id = *self
-            .config
-            .phoneme_id_map
-            .get(&PAD)
-            .unwrap()
-            .first()
-            .unwrap();
-        let bos_id = *self
-            .config
-            .phoneme_id_map
-            .get(&BOS)
-            .unwrap()
-            .first()
-            .unwrap();
-        let eos_id = *self
-            .config
-            .phoneme_id_map
-            .get(&EOS)
-            .unwrap()
-            .first()
-            .unwrap();
+        let (pad_id, bos_id, eos_id) = self.get_meta_ids();
         let phonemes = self.phonemes_to_input_ids(&phonemes, pad_id, bos_id, eos_id);
         self.infer_with_values(phonemes)
     }
-
     fn wave_info(&self) -> PiperResult<PiperWaveInfo> {
-        Ok(PiperWaveInfo {
-            sample_rate: self.config.audio.sample_rate as usize,
-            num_channels: 1usize,
-            sample_width: 2usize,
-        })
+        VitsModelCommons::wave_info(&self)
     }
-}
 
-fn reversed_mapping<K, V>(input: &HashMap<K, V>) -> HashMap<V, K>
-where
-    K: ToOwned<Owned = K>,
-    V: ToOwned<Owned = V> + std::hash::Hash + std::cmp::Eq,
-{
-    HashMap::from_iter(input.iter().map(|(k, v)| (v.to_owned(), k.to_owned())))
 }

@@ -2,7 +2,7 @@ use once_cell::sync::OnceCell;
 use pgrpc::piper_grpc_server::{PiperGrpc, PiperGrpcServer};
 use piper_core::{PiperError, PiperModel, PiperResult};
 use piper_synth::{AudioOutputConfig, PiperSpeechStreamBatched, PiperSpeechSynthesizer};
-use piper_vits::VitsModel;
+use piper_vits::{VitsModel, VitsModelCommons};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -224,16 +224,16 @@ impl PiperGrpcService {
             }
         };
         if let Some(speaker) = synth_opts.speaker {
-            voice.model.set_speaker(speaker)?;
+            voice.model.as_ref().set_speaker(speaker)?;
         }
         if let Some(length_scale) = synth_opts.length_scale {
-            voice.model.set_length_scale(length_scale)?;
+            voice.model.as_ref().set_length_scale(length_scale)?;
         }
         if let Some(noise_scale) = synth_opts.noise_scale {
-            voice.model.set_noise_scale(noise_scale)?;
+            voice.model.as_ref().set_noise_scale(noise_scale)?;
         }
         if let Some(noise_w) = synth_opts.noise_w {
-            voice.model.set_noise_w(noise_w)?;
+            voice.model.as_ref().set_noise_w(noise_w)?;
         }
         self._get_synth_options_from_model(&voice.model)
     }

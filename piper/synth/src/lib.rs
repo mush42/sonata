@@ -60,7 +60,7 @@ impl AudioOutputConfig {
                     utils::percent_to_param(pitch, PITCH_RANGE.0, PITCH_RANGE.1),
                 );
             }
-            sonic_sys::sonicWriteShortToStream(stream, samples.as_ptr(), input_len as i32);
+            sonic_sys::sonicWriteShortToStream(stream, samples.as_vec().as_ptr(), input_len as i32);
             sonic_sys::sonicFlushStream(stream);
             let num_samples = sonic_sys::sonicSamplesAvailable(stream);
             if num_samples <= 0 {
@@ -81,7 +81,7 @@ impl AudioOutputConfig {
             let num_samples = (time_ms * audio.info.sample_rate as u32) / 1000u32;
             out_buf.append(&mut vec![0i16; num_samples as usize]);
         };
-        audio.samples = out_buf;
+        audio.samples = out_buf.into();
         Ok(audio)
     }
 }

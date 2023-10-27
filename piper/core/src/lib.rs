@@ -68,16 +68,68 @@ pub struct PiperWaveInfo {
     pub sample_width: usize,
 }
 
+
+#[derive(Clone, Debug, Default)]
+#[must_use]
+pub struct RawWaveSamples(Vec<i16>);
+
+impl RawWaveSamples {
+    pub fn new(samples: Vec<i16>) -> Self {
+        Self(samples)
+    }
+    pub fn as_vec(&self) -> &Vec<i16> {
+        &self.0
+    }
+
+    pub fn to_vec(self) -> Vec<i16> {
+        self.0
+    }
+
+    pub fn as_wave_bytes(&self) -> Vec<u8> {
+        self.0.iter().flat_map(|i| i.to_le_bytes()).collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl From<RawWaveSamples> for Vec<i16> {
+    fn from(other: RawWaveSamples) -> Self {
+        other.to_vec()
+    }
+}
+
+impl From<Vec<i16>> for  RawWaveSamples {
+    fn from(other: Vec<i16>) -> Self {
+        Self::new(other)
+    }
+}
+
+impl IntoIterator for RawWaveSamples {
+    type Item = i16;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct PiperWaveSamples {
-    pub samples: Vec<i16>,
+    pub samples: RawWaveSamples,
     pub info: PiperWaveInfo,
     pub inference_ms: Option<f32>,
 }
 
 impl PiperWaveSamples {
-    pub fn new(samples: Vec<i16>, sample_rate: usize, inference_ms: Option<f32>) -> Self {
+    pub fn new(samples: RawWaveSamples, sample_rate: usize, inference_ms: Option<f32>) -> Self {
         Self {
             samples,
             inference_ms,
@@ -90,11 +142,11 @@ impl PiperWaveSamples {
     }
 
     pub fn to_vec(self) -> Vec<i16> {
-        self.samples
+        self.samples.to_vec()
     }
 
     pub fn as_wave_bytes(&self) -> Vec<u8> {
-        self.samples.iter().flat_map(|i| i.to_le_bytes()).collect()
+        self.samples.as_wave_bytes()
     }
 
     pub fn len(&self) -> usize {
@@ -125,13 +177,14 @@ impl PiperWaveSamples {
     pub fn save_to_file(&self, filename: &str) -> PiperResult<()> {
         Ok(wave_writer::write_wave_samples_to_file(
             filename.into(),
-            self.samples.iter(),
+            self.samples.as_vec().iter(),
             self.info.sample_rate as u32,
             self.info.num_channels as u32,
             self.info.sample_width as u32,
         )?)
     }
 }
+
 
 impl IntoIterator for PiperWaveSamples {
     type Item = i16;
@@ -142,6 +195,7 @@ impl IntoIterator for PiperWaveSamples {
     }
 }
 
+
 pub trait PiperModel {
     fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes>;
     fn speak_batch(
@@ -149,5 +203,12 @@ pub trait PiperModel {
         phoneme_batches: Vec< String>,
     ) -> PiperResult<Vec<PiperWaveSamples>>;
     fn speak_one_sentence(&self, phonemes:  String) -> PiperWaveResult;
+    fn stream_synthesis(
+        &self,
+        #[allow(unused_variables)]
+        phonemes:  String,
+    ) -> PiperResult<Vec<RawWaveSamples>> {
+        Err(PiperError::OperationError("Streaming is not supported for this instance".to_string()))
+    }
     fn wave_info(&self) -> PiperResult<PiperWaveInfo>;
 }
