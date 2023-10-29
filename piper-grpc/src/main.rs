@@ -1,8 +1,10 @@
+#![feature(trait_upcasting)]
+
 use once_cell::sync::OnceCell;
 use pgrpc::piper_grpc_server::{PiperGrpc, PiperGrpcServer};
-use piper_core::{PiperError, PiperModel, PiperResult};
+use piper_core::{PiperError, PiperResult};
 use piper_synth::{AudioOutputConfig, PiperSpeechStreamBatched, PiperSpeechSynthesizer};
-use piper_vits::{VitsModel, VitsModelCommons};
+use piper_vits::VitsVoice;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -61,13 +63,12 @@ impl From<PiperGrpcError> for Status {
 }
 
 struct Voice {
-    model: Arc<VitsModel>,
+    model: Arc<dyn VitsVoice>,
     synth: PiperSpeechSynthesizer,
 }
 
 impl Voice {
-    fn new(vits: VitsModel) -> PiperResult<Self> {
-        let model = Arc::new(vits);
+    fn new(model: Arc<dyn VitsVoice + Send + Sync>) -> PiperResult<Self> {
         let model_clone = Arc::clone(&model);
         let synth = PiperSpeechSynthesizer::new(model_clone)?;
         Ok(Self { model, synth })
@@ -91,13 +92,9 @@ impl PiperGrpcService {
             )
         })
     }
-    fn _load_vits_voice(
-        &self,
-        onnx_path: PathBuf,
-        config_path: PathBuf,
-    ) -> PiperGrpcResult<pgrpc::VoiceInfo> {
-        let voice_id = if onnx_path.is_file() {
-            let voice_path = onnx_path
+    fn _load_vits_voice(&self, config_path: PathBuf) -> PiperGrpcResult<pgrpc::VoiceInfo> {
+        let voice_id = if config_path.is_file() {
+            let voice_path = config_path
                 .canonicalize()
                 .unwrap()
                 .to_string_lossy()
@@ -105,29 +102,28 @@ impl PiperGrpcService {
             (xxh3_64(voice_path.as_bytes()) / VOICE_ID_REDUCTION_FACTOR).to_string()
         } else {
             return Err(PiperGrpcError::VoiceNotFound(format!(
-                "ONNX file does not exists: `{}`",
-                onnx_path.display()
+                "Config file does not exists: `{}`",
+                config_path.display()
             )));
         };
         if let Some(voice) = (self.0.read().unwrap()).get(&voice_id) {
-            return self._get_voice_info(voice_id, &voice.model);
+            return self._get_voice_info(voice_id, voice.model.as_ref());
         }
-        let vits_model =
-            VitsModel::new(config_path, onnx_path.clone(), Self::get_ort_environment())?;
+        let vits_model = piper_vits::from_config_path(&config_path, Self::get_ort_environment())?;
         log::info!(
             "Loaded voice from: `{}`. Voice ID: {}",
-            onnx_path.display(),
+            config_path.display(),
             voice_id
         );
-        let voice_info = self._get_voice_info(voice_id.clone(), &vits_model)?;
         let voice = Voice::new(vits_model)?;
+        let voice_info = self._get_voice_info(voice_id.clone(), voice.model.as_ref())?;
         (self.0.write().unwrap()).insert(voice_id, voice);
         Ok(voice_info)
     }
     fn _get_voice_info(
         &self,
         voice_id: String,
-        vits_model: &VitsModel,
+        vits_model: &(impl VitsVoice + ?Sized),
     ) -> PiperGrpcResult<pgrpc::VoiceInfo> {
         let wav_info = vits_model.wave_info()?;
         let speakers = vits_model.speakers()?;
@@ -182,7 +178,7 @@ impl PiperGrpcService {
     }
     fn _get_synth_options_from_model(
         &self,
-        model: &VitsModel,
+        model: &(impl VitsVoice + ?Sized),
     ) -> PiperGrpcResult<pgrpc::SynthesisOptions> {
         let speaker = match model.get_speaker() {
             Ok(speaker) => speaker,
@@ -206,7 +202,7 @@ impl PiperGrpcService {
                 )))
             }
         };
-        self._get_synth_options_from_model(&voice.model)
+        self._get_synth_options_from_model(voice.model.as_ref())
     }
     fn _set_synth_options(
         &self,
@@ -235,7 +231,7 @@ impl PiperGrpcService {
         if let Some(noise_w) = synth_opts.noise_w {
             voice.model.as_ref().set_noise_w(noise_w)?;
         }
-        self._get_synth_options_from_model(&voice.model)
+        self._get_synth_options_from_model(voice.model.as_ref())
     }
 }
 
@@ -255,12 +251,8 @@ impl PiperGrpc for PiperGrpcService {
         _request: Request<pgrpc::VoicePath>,
     ) -> Result<Response<pgrpc::VoiceInfo>, Status> {
         let voice_path = _request.into_inner();
-        let onnx_path = PathBuf::from(voice_path.onnx_path);
-        let config_path = match voice_path.config_path {
-            Some(pth) => PathBuf::from(pth),
-            None => onnx_path.with_extension("onnx.json"),
-        };
-        let voice_info = self._load_vits_voice(onnx_path, config_path)?;
+        let config_path = PathBuf::from(voice_path.config_path);
+        let voice_info = self._load_vits_voice(config_path)?;
         Ok(Response::new(voice_info))
     }
     async fn get_voice_info(
@@ -278,7 +270,7 @@ impl PiperGrpc for PiperGrpcService {
                 )))?
             }
         };
-        let voice_info = self._get_voice_info(voice_id, &voice.model)?;
+        let voice_info = self._get_voice_info(voice_id, voice.model.as_ref())?;
         Ok(Response::new(voice_info))
     }
     async fn get_synthesis_options(

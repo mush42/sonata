@@ -68,7 +68,6 @@ pub struct PiperWaveInfo {
     pub sample_width: usize,
 }
 
-
 #[derive(Clone, Debug, Default)]
 #[must_use]
 pub struct RawWaveSamples(Vec<i16>);
@@ -104,7 +103,7 @@ impl From<RawWaveSamples> for Vec<i16> {
     }
 }
 
-impl From<Vec<i16>> for  RawWaveSamples {
+impl From<Vec<i16>> for RawWaveSamples {
     fn from(other: Vec<i16>) -> Self {
         Self::new(other)
     }
@@ -118,7 +117,6 @@ impl IntoIterator for RawWaveSamples {
         self.0.into_iter()
     }
 }
-
 
 #[derive(Debug, Clone)]
 #[must_use]
@@ -166,7 +164,7 @@ impl PiperWaveSamples {
     }
 
     pub fn real_time_factor(&self) -> Option<f32> {
-        let infer_ms= self.inference_ms?;
+        let infer_ms = self.inference_ms?;
         let audio_duration = self.duration_ms();
         if audio_duration == 0.0 {
             return Some(0.0f32);
@@ -185,7 +183,6 @@ impl PiperWaveSamples {
     }
 }
 
-
 impl IntoIterator for PiperWaveSamples {
     type Item = i16;
     type IntoIter = std::vec::IntoIter<Self::Item>;
@@ -195,20 +192,20 @@ impl IntoIterator for PiperWaveSamples {
     }
 }
 
-
 pub trait PiperModel {
     fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes>;
-    fn speak_batch(
-        &self,
-        phoneme_batches: Vec< String>,
-    ) -> PiperResult<Vec<PiperWaveSamples>>;
-    fn speak_one_sentence(&self, phonemes:  String) -> PiperWaveResult;
-    fn stream_synthesis(
-        &self,
-        #[allow(unused_variables)]
-        phonemes:  String,
-    ) -> PiperResult<Vec<RawWaveSamples>> {
-        Err(PiperError::OperationError("Streaming is not supported for this instance".to_string()))
+    fn speak_batch(&self, phoneme_batches: Vec<String>) -> PiperResult<Vec<PiperWaveSamples>>;
+    fn speak_one_sentence(&self, phonemes: String) -> PiperWaveResult;
+    fn stream_synthesis<'a>(
+        &'a self,
+        #[allow(unused_variables)] phonemes: String,
+        #[allow(unused_variables)] chunk_size: u32,
+        #[allow(unused_variables)] chunk_padding: u32,
+    ) -> PiperResult<Box<dyn Iterator<Item = PiperResult<RawWaveSamples>> + 'a>>
+    {
+        Ok(Box::new([        Err(PiperError::OperationError(
+            "Streaming synthesis is not supported for this model".to_string(),
+        ))].into_iter()))
     }
     fn wave_info(&self) -> PiperResult<PiperWaveInfo>;
 }

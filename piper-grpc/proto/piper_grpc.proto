@@ -61,8 +61,7 @@ message VoiceInfo {
 }
 
 message VoicePath {
-  string onnx_path = 1;
-  optional string config_path = 2;
+  string config_path = 1;
 }
 
 // Contains text and other synthesis parameters

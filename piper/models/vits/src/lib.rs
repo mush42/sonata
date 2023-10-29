@@ -1,17 +1,19 @@
 use espeak_phonemizer::text_to_phonemes;
 use libtashkeel_base::do_tashkeel;
-use ndarray::{Array1, Array2, CowArray};
+use ndarray::{Array, Array1, Array2, ArrayView, CowArray, Dim, IxDynImpl};
 use ndarray_stats::QuantileExt;
 use once_cell::sync::{Lazy, OnceCell};
 use ort::{tensor::OrtOwnedTensor, Environment, GraphOptimizationLevel, SessionBuilder, Value};
 use piper_core::{
-    Phonemes, PiperError, PiperModel, PiperResult, PiperWaveInfo, PiperWaveResult, PiperWaveSamples,
+    Phonemes, PiperError, PiperModel, PiperResult, PiperWaveInfo, PiperWaveResult,
+    PiperWaveSamples, RawWaveSamples,
 };
 use serde::Deserialize;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
-use std::path::PathBuf;
+use std::mem::ManuallyDrop;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 const MAX_WAV_VALUE: f32 = 32767.0;
@@ -22,6 +24,7 @@ const PAD: char = '_';
 #[allow(dead_code)]
 static CPU_COUNT: Lazy<i16> = Lazy::new(|| num_cpus::get().try_into().unwrap_or(4));
 
+#[inline(always)]
 fn reversed_mapping<K, V>(input: &HashMap<K, V>) -> HashMap<V, K>
 where
     K: ToOwned<Owned = K>,
@@ -30,8 +33,31 @@ where
     HashMap::from_iter(input.iter().map(|(k, v)| (v.to_owned(), k.to_owned())))
 }
 
+#[inline(always)]
+fn audio_float_to_i16(audio_f32: ArrayView<f32, Dim<IxDynImpl>>) -> PiperResult<RawWaveSamples> {
+    if audio_f32.is_empty() {
+        return Ok(Default::default());
+    }
+    let Ok(min_audio_value) = audio_f32.min() else {
+        return Err(PiperError::OperationError(
+            "Invalid output from model inference.".to_string(),
+        ));
+    };
+    let Ok(max_audio_value) = audio_f32.max() else {
+        return Err(PiperError::OperationError(
+            "Invalid output from model inference. ".to_string(),
+        ));
+    };
+    let abs_max = max_audio_value.max(min_audio_value.abs());
+    let audio_scale = MAX_WAV_VALUE / abs_max.max(0.01f32);
+    let samples: Vec<i16> = audio_f32
+        .iter()
+        .map(|i| (i * audio_scale).clamp(i16::MIN as f32, i16::MAX as f32) as i16)
+        .collect::<Vec<i16>>();
+    Ok(samples.into())
+}
 
-fn load_model_config(config_path: &PathBuf) -> PiperResult<(ModelConfig, SynthesisConfig)> {
+fn load_model_config(config_path: &Path) -> PiperResult<(ModelConfig, SynthesisConfig)> {
     let file = match File::open(config_path) {
         Ok(file) => file,
         Err(why) => {
@@ -61,10 +87,66 @@ fn load_model_config(config_path: &PathBuf) -> PiperResult<(ModelConfig, Synthes
     Ok((model_config, synth_config))
 }
 
+fn create_tashkeel_engine(
+    config: &ModelConfig,
+) -> PiperResult<Option<libtashkeel_base::DynamicInferenceEngine>> {
+    if config.espeak.voice == "ar" {
+        match libtashkeel_base::create_inference_engine(None) {
+            Ok(engine) => Ok(Some(engine)),
+            Err(msg) => Err(PiperError::OperationError(format!(
+                "Failed to create inference engine for libtashkeel. {}",
+                msg
+            ))),
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+fn create_inference_session(
+    model_path: &Path,
+    ort_env: &'static Arc<Environment>,
+) -> Result<ort::Session, ort::OrtError> {
+    SessionBuilder::new(ort_env)?
+        .with_optimization_level(GraphOptimizationLevel::Disable)?
+        .with_memory_pattern(false)?
+        .with_parallel_execution(false)?
+        .with_model_from_file(model_path)
+}
+
+pub fn from_config_path(
+    config_path: &Path,
+    ort_env: &'static Arc<Environment>,
+) -> PiperResult<Arc<dyn VitsVoice + Send + Sync>> {
+    let (config, synth_config) = load_model_config(config_path)?;
+    if config.streaming.unwrap_or_default() {
+        Ok(Arc::new(VitsStreamingModel::from_config(
+            config,
+            synth_config,
+            &config_path.with_file_name("encoder.onnx"),
+            &config_path.with_file_name("decoder.onnx"),
+            ort_env,
+        )?))
+    } else {
+        let Some(onnx_filename) = config_path.file_stem() else {
+            return Err(PiperError::OperationError(format!(
+                "Invalid config filename format `{}`",
+                config_path.display()
+            )));
+        };
+        Ok(Arc::new(VitsModel::from_config(
+            config,
+            synth_config,
+            &config_path.with_file_name(onnx_filename),
+            ort_env,
+        )?))
+    }
+}
+
 #[derive(Deserialize, Default)]
 pub struct AudioConfig {
     pub sample_rate: u32,
-    pub quality: Option<String>
+    pub quality: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -92,7 +174,6 @@ pub struct Language {
     name_english: Option<String>,
 }
 
-
 #[derive(Deserialize, Default)]
 pub struct ModelConfig {
     pub key: Option<String>,
@@ -100,6 +181,7 @@ pub struct ModelConfig {
     pub audio: AudioConfig,
     pub num_speakers: u32,
     pub speaker_id_map: HashMap<String, i64>,
+    streaming: Option<bool>,
     espeak: ESpeakConfig,
     inference: InferenceConfig,
     #[allow(dead_code)]
@@ -122,40 +204,31 @@ pub trait VitsModelCommons {
     fn get_config(&self) -> &ModelConfig;
     fn get_speaker_map(&self) -> &HashMap<i64, String>;
     fn get_tashkeel_engine(&self) -> Option<&libtashkeel_base::DynamicInferenceEngine>;
-
     fn get_meta_ids(&self) -> (i64, i64, i64) {
         let config = self.get_config();
-        let pad_id = *config
-            .phoneme_id_map
-            .get(&PAD)
-            .unwrap()
-            .first()
-            .unwrap();
-        let bos_id = *config
-            .phoneme_id_map
-            .get(&BOS)
-            .unwrap()
-            .first()
-            .unwrap();
-        let eos_id = *config
-            .phoneme_id_map
-            .get(&EOS)
-            .unwrap()
-            .first()
-            .unwrap();
+        let pad_id = *config.phoneme_id_map.get(&PAD).unwrap().first().unwrap();
+        let bos_id = *config.phoneme_id_map.get(&BOS).unwrap().first().unwrap();
+        let eos_id = *config.phoneme_id_map.get(&EOS).unwrap().first().unwrap();
         (pad_id, bos_id, eos_id)
     }
     fn language(&self) -> Option<String> {
-        self.get_config().language.as_ref().map(|lang| lang.code.clone())
+        self.get_config()
+            .language
+            .as_ref()
+            .map(|lang| lang.code.clone())
     }
     fn quality(&self) -> Option<String> {
         self.get_config().audio.quality.as_ref().cloned()
     }
     fn default_synthesis_config(&self) -> SynthesisConfig {
         let config = self.get_config();
-        
+
         let speaker = if config.num_speakers > 0 {
-            self.get_speaker_map().get(&0).as_ref().cloned().map(|name| (name.clone(), 0))
+            self.get_speaker_map()
+                .get(&0)
+                .as_ref()
+                .cloned()
+                .map(|name| (name.clone(), 0))
         } else {
             None
         };
@@ -243,7 +316,7 @@ pub trait VitsModelCommons {
         phoneme_ids.push(eos_id);
         phoneme_ids
     }
-    fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes> {
+    fn do_phonemize_text(&self, text: &str) -> PiperResult<Phonemes> {
         let config = self.get_config();
         let text = if config.espeak.voice == "ar" {
             let diacritized = self.diacritize_text(text)?;
@@ -263,8 +336,7 @@ pub trait VitsModelCommons {
         Ok(phonemes.into())
     }
     fn diacritize_text(&self, text: &str) -> PiperResult<String> {
-        let diacritized_text = match do_tashkeel(self.get_tashkeel_engine().unwrap(), text, None)
-        {
+        let diacritized_text = match do_tashkeel(self.get_tashkeel_engine().unwrap(), text, None) {
             Ok(d_text) => d_text,
             Err(msg) => {
                 return Err(PiperError::OperationError(format!(
@@ -275,7 +347,7 @@ pub trait VitsModelCommons {
         };
         Ok(diacritized_text)
     }
-    fn wave_info(&self) -> PiperResult<PiperWaveInfo> {
+    fn get_wave_info(&self) -> PiperResult<PiperWaveInfo> {
         Ok(PiperWaveInfo {
             sample_rate: self.get_config().audio.sample_rate as usize,
             num_channels: 1usize,
@@ -284,57 +356,37 @@ pub trait VitsModelCommons {
     }
 }
 
+pub trait VitsVoice: VitsModelCommons + PiperModel + Send + Sync {}
+
 pub struct VitsModel {
     synth_config: RwLock<SynthesisConfig>,
     config: ModelConfig,
     speaker_map: HashMap<i64, String>,
-    onnx_path: PathBuf,
-    ort_env: &'static Arc<Environment>,
-    session: OnceCell<Result<ort::Session, ort::OrtError>>,
+    session: ort::Session,
     tashkeel_engine: Option<libtashkeel_base::DynamicInferenceEngine>,
 }
 
 impl VitsModel {
     pub fn new(
         config_path: PathBuf,
-        onnx_path: PathBuf,
-        ort_env: &'static Arc<ort::Environment>,
+        onnx_path: &Path,
+        ort_env: &'static Arc<Environment>,
     ) -> PiperResult<Self> {
         match load_model_config(&config_path) {
             Ok((config, synth_config)) => {
-                let speaker_map = reversed_mapping(&config.speaker_id_map);
-                let tashkeel_engine = if config.espeak.voice == "ar" {
-                    match libtashkeel_base::create_inference_engine(None) {
-                        Ok(engine) => Some(engine),
-                        Err(msg) => {
-                            return Err(PiperError::OperationError(format!(
-                                "Failed to create inference engine for libtashkeel. {}",
-                                msg
-                            )))
-                        }
-                    }
-                } else {
-                    None
-                };
-                Ok(Self {
-                    synth_config: RwLock::new(synth_config),
-                    config,
-                    speaker_map,
-                    onnx_path,
-                    ort_env,
-                    session: OnceCell::new(),
-                    tashkeel_engine,
-                })
+                Self::from_config(config, synth_config, onnx_path, ort_env)
             }
             Err(error) => Err(error),
         }
     }
-    fn infer_with_values_batched(
-        &self,
-        mut input_batches: Vec<Vec<i64>>,
-    ) -> PiperResult<Vec<PiperWaveSamples>> {
-        let session = match self.get_or_create_inference_session() {
-            Ok(ref session) => session,
+    fn from_config(
+        config: ModelConfig,
+        synth_config: SynthesisConfig,
+        onnx_path: &Path,
+        ort_env: &'static Arc<Environment>,
+    ) -> PiperResult<Self> {
+        let session = match create_inference_session(onnx_path, ort_env) {
+            Ok(session) => session,
             Err(err) => {
                 return Err(PiperError::OperationError(format!(
                     "Failed to initialize onnxruntime inference session: `{}`",
@@ -342,133 +394,29 @@ impl VitsModel {
                 )))
             }
         };
-
-        let synth_config = self.synth_config.read().unwrap();
-
-        let pad_input_id = self
-            .config
-            .phoneme_id_map
-            .get(&PAD)
-            .unwrap()
-            .first()
-            .unwrap();
-        let num_batches = input_batches.len();
-        let max_len = match input_batches.iter().map(|v| v.len()).max() {
-            Some(length) => length,
-            None => {
-                return Err(PiperError::OperationError(
-                    "Empty phoneme input".to_string(),
-                ))
-            }
-        };
-        for input in input_batches.iter_mut() {
-            input.resize(max_len, *pad_input_id);
-        }
-        let input_batches = Vec::from_iter(input_batches.into_iter().flatten());
-        let phoneme_inputs = CowArray::from(
-            Array2::<i64>::from_shape_vec((num_batches, max_len), input_batches).unwrap(),
-        )
-        .into_dyn();
-
-        let input_lengths = CowArray::from(Array1::<i64>::from_iter(
-            (0..num_batches).map(|_| max_len as i64),
-        ))
-        .into_dyn();
-
-        let scales = Array1::<f32>::from_iter([
-            synth_config.noise_scale,
-            synth_config.length_scale,
-            synth_config.noise_w,
-        ]);
-        let scales = CowArray::from(scales).into_dyn();
-
-        let speaker_id = if self.config.num_speakers > 1 {
-            let sid = match synth_config.speaker {
-                Some((_, sid)) => sid,
-                None => 0,
-            };
-            Some(CowArray::from(Array1::<i64>::from_iter([sid])).into_dyn())
-        } else {
-            None
-        };
-
-        let timer = std::time::Instant::now();
-        let outputs: Vec<Value> = {
-            let mut inputs = vec![
-                Value::from_array(session.allocator(), &phoneme_inputs).unwrap(),
-                Value::from_array(session.allocator(), &input_lengths).unwrap(),
-                Value::from_array(session.allocator(), &scales).unwrap(),
-            ];
-            if let Some(ref sid_tensor) = speaker_id {
-                inputs.push(Value::from_array(session.allocator(), sid_tensor).unwrap());
-            }
-            match session.run(inputs) {
-                Ok(out) => out,
-                Err(e) => {
+        let speaker_map = reversed_mapping(&config.speaker_id_map);
+        let tashkeel_engine = if config.espeak.voice == "ar" {
+            match libtashkeel_base::create_inference_engine(None) {
+                Ok(engine) => Some(engine),
+                Err(msg) => {
                     return Err(PiperError::OperationError(format!(
-                        "Failed to run model inference. Error: {}",
-                        e
+                        "Failed to create inference engine for libtashkeel. {}",
+                        msg
                     )))
                 }
             }
+        } else {
+            None
         };
-        let inference_ms = timer.elapsed().as_millis() as f32;
-
-        let outputs: OrtOwnedTensor<f32, _> = match outputs[0].try_extract() {
-            Ok(out) => out,
-            Err(e) => {
-                return Err(PiperError::OperationError(format!(
-                    "Failed to run model inference. Error: {}",
-                    e
-                )))
-            }
-        };
-        let outputs = outputs.view();
-        let audio_outputs = outputs
-            .view()
-            .into_shape((num_batches, *outputs.shape().last().unwrap()))
-            .unwrap();
-
-        let mut samples: Vec<Vec<i16>> = Vec::with_capacity(num_batches);
-        for audio in audio_outputs.rows().into_iter() {
-            let Ok(min_audio_value) = audio.min() else {
-                return Err(PiperError::OperationError(
-                    "Invalid output from model inference.".to_string(),
-                ));
-            };
-            let Ok(max_audio_value) = audio.max() else {
-                return Err(PiperError::OperationError(
-                    "Invalid output from model inference. ".to_string(),
-                ));
-            };
-            let abs_max = max_audio_value.max(min_audio_value.abs());
-            let audio_scale = MAX_WAV_VALUE / abs_max.max(0.01f32);
-            let clampped = Vec::from_iter(
-                audio
-                    .into_iter()
-                    .map(|i| (i * audio_scale).clamp(i16::MIN as f32, i16::MAX as f32) as i16),
-            );
-            samples.push(clampped);
-        }
-        Ok(Vec::from_iter(samples.into_iter().map(|audio| {
-            PiperWaveSamples::new(
-                audio.into(),
-                self.config.audio.sample_rate as usize,
-                Some(inference_ms),
-            )
-        })))
+        Ok(Self {
+            synth_config: RwLock::new(synth_config),
+            config,
+            speaker_map,
+            session,
+            tashkeel_engine,
+        })
     }
     fn infer_with_values(&self, input_phonemes: Vec<i64>) -> PiperWaveResult {
-        let session = match self.get_or_create_inference_session() {
-            Ok(ref session) => session,
-            Err(err) => {
-                return Err(PiperError::OperationError(format!(
-                    "Failed to initialize onnxruntime inference session: `{}`",
-                    err
-                )))
-            }
-        };
-
         let synth_config = self.synth_config.read().unwrap();
 
         let input_len = input_phonemes.len();
@@ -495,6 +443,7 @@ impl VitsModel {
             None
         };
 
+        let session = &self.session;
         let timer = std::time::Instant::now();
         let outputs: Vec<Value> = {
             let mut inputs = vec![
@@ -529,48 +478,16 @@ impl VitsModel {
 
         let audio_output = outputs.view();
 
-        let Ok(min_audio_value) = audio_output.min() else {
-            return Err(PiperError::OperationError(
-                "Invalid output from model inference.".to_string(),
-            ));
-        };
-        let Ok(max_audio_value) = audio_output.max() else {
-            return Err(PiperError::OperationError(
-                "Invalid output from model inference. ".to_string(),
-            ));
-        };
-        let abs_max = max_audio_value.max(min_audio_value.abs());
-        let audio_scale = MAX_WAV_VALUE / abs_max.max(0.01f32);
-        let samples: Vec<i16> = audio_output
-            .iter()
-            .map(|i| (i * audio_scale).clamp(i16::MIN as f32, i16::MAX as f32) as i16)
-            .collect::<Vec<i16>>();
+        let samples = audio_float_to_i16(audio_output.view())?;
         Ok(PiperWaveSamples::new(
-            samples.into(),
+            samples,
             self.config.audio.sample_rate as usize,
             Some(inference_ms),
         ))
     }
-    fn get_or_create_inference_session(&self) -> &Result<ort::Session, ort::OrtError> {
-        self.session.get_or_init(|| {
-            SessionBuilder::new(self.ort_env)?
-                .with_optimization_level(GraphOptimizationLevel::Disable)?
-                .with_memory_pattern(false)?
-                .with_parallel_execution(false)?
-                .with_model_from_file(&self.onnx_path)
-        })
-    }
     pub fn get_input_output_info(&self) -> PiperResult<Vec<String>> {
-        let session = match self.get_or_create_inference_session() {
-            Ok(ref session) => session,
-            Err(err) => {
-                return Err(PiperError::OperationError(format!(
-                    "Failed to initialize onnxruntime inference session: `{}`",
-                    err
-                )))
-            }
-        };
-        Ok(session
+        Ok(self
+            .session
             .inputs
             .iter()
             .map(|i| {
@@ -587,8 +504,7 @@ impl VitsModel {
     }
 }
 
-
-impl VitsModelCommons for &VitsModel {
+impl VitsModelCommons for VitsModel {
     fn get_synth_config(&self) -> &RwLock<SynthesisConfig> {
         &self.synth_config
     }
@@ -605,7 +521,7 @@ impl VitsModelCommons for &VitsModel {
 
 impl PiperModel for VitsModel {
     fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes> {
-        VitsModelCommons::phonemize_text(&self, text)
+        self.do_phonemize_text(text)
     }
 
     fn speak_batch(&self, phoneme_batches: Vec<String>) -> PiperResult<Vec<PiperWaveSamples>> {
@@ -613,9 +529,13 @@ impl PiperModel for VitsModel {
         let phoneme_batches = Vec::from_iter(
             phoneme_batches
                 .into_iter()
-                .map(|batch| self.phonemes_to_input_ids(&batch, pad_id, bos_id, eos_id)),
+                .map(|phonemes| self.phonemes_to_input_ids(&phonemes, pad_id, bos_id, eos_id)),
         );
-        self.infer_with_values_batched(phoneme_batches)
+        let mut retval = Vec::new();
+        for phonemes in phoneme_batches.into_iter() {
+            retval.push(self.infer_with_values(phonemes)?);
+        }
+        Ok(retval)
     }
 
     fn speak_one_sentence(&self, phonemes: String) -> PiperWaveResult {
@@ -624,7 +544,287 @@ impl PiperModel for VitsModel {
         self.infer_with_values(phonemes)
     }
     fn wave_info(&self) -> PiperResult<PiperWaveInfo> {
-        VitsModelCommons::wave_info(&self)
+        self.get_wave_info()
+    }
+}
+
+impl VitsVoice for VitsModel {}
+
+pub struct VitsStreamingModel {
+    synth_config: RwLock<SynthesisConfig>,
+    config: ModelConfig,
+    speaker_map: HashMap<i64, String>,
+    encoder_model: ort::Session,
+    decoder_model: Arc<ort::Session>,
+    tashkeel_engine: Option<libtashkeel_base::DynamicInferenceEngine>,
+}
+
+impl VitsStreamingModel {
+    fn from_config(
+        config: ModelConfig,
+        synth_config: SynthesisConfig,
+        encoder_path: &Path,
+        decoder_path: &Path,
+        ort_env: &'static Arc<Environment>,
+    ) -> PiperResult<Self> {
+        let encoder_model = match create_inference_session(encoder_path, ort_env) {
+            Ok(model) => model,
+            Err(err) => {
+                return Err(PiperError::OperationError(format!(
+                    "Failed to initialize onnxruntime inference session: `{}`",
+                    err
+                )))
+            }
+        };
+        let decoder_model = match create_inference_session(decoder_path, ort_env) {
+            Ok(model) => Arc::new(model),
+            Err(err) => {
+                return Err(PiperError::OperationError(format!(
+                    "Failed to initialize onnxruntime inference session: `{}`",
+                    err
+                )))
+            }
+        };
+        let speaker_map = reversed_mapping(&config.speaker_id_map);
+        let tashkeel_engine = create_tashkeel_engine(&config)?;
+        Ok(Self {
+            synth_config: RwLock::new(synth_config),
+            config,
+            speaker_map,
+            encoder_model,
+            decoder_model,
+            tashkeel_engine,
+        })
     }
 
+    fn infer_with_values(&self, input_phonemes: Vec<i64>) -> PiperWaveResult {
+        let timer = std::time::Instant::now();
+        let encoder_output = self.infer_encoder(input_phonemes)?;
+        let audio = self.infer_decoder(encoder_output)?;
+        let inference_ms = timer.elapsed().as_millis() as f32;
+        Ok(PiperWaveSamples::new(
+            audio,
+            self.config.audio.sample_rate as usize,
+            Some(inference_ms),
+        ))
+    }
+    fn infer_encoder(&self, input_phonemes: Vec<i64>) -> PiperResult<EncoderOutputs> {
+        let synth_config = self.synth_config.read().unwrap();
+
+        let input_len = input_phonemes.len();
+        let phoneme_inputs =
+            CowArray::from(Array2::<i64>::from_shape_vec((1, input_len), input_phonemes).unwrap())
+                .into_dyn();
+
+        let input_lengths = CowArray::from(Array1::<i64>::from_iter([input_len as i64])).into_dyn();
+
+        let scales = Array1::<f32>::from_iter([
+            synth_config.noise_scale,
+            synth_config.length_scale,
+            synth_config.noise_w,
+        ]);
+        let scales = CowArray::from(scales).into_dyn();
+
+        let speaker_id = if self.config.num_speakers > 1 {
+            let sid = match synth_config.speaker {
+                Some((_, sid)) => sid,
+                None => 0,
+            };
+            Some(CowArray::from(Array1::<i64>::from_iter([sid])).into_dyn())
+        } else {
+            None
+        };
+
+        let session = &self.encoder_model;
+        let ort_values: Vec<Value> = {
+            let mut inputs = vec![
+                Value::from_array(session.allocator(), &phoneme_inputs).unwrap(),
+                Value::from_array(session.allocator(), &input_lengths).unwrap(),
+                Value::from_array(session.allocator(), &scales).unwrap(),
+            ];
+            if let Some(ref sid_tensor) = speaker_id {
+                inputs.push(Value::from_array(session.allocator(), sid_tensor).unwrap());
+            }
+            match session.run(inputs) {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(PiperError::OperationError(format!(
+                        "Failed to run model inference. Error: {}",
+                        e
+                    )))
+                }
+            }
+        };
+        EncoderOutputs::new(ManuallyDrop::new(ort_values))
+    }
+    fn infer_decoder(&self, encoder_outputs: EncoderOutputs) -> PiperResult<RawWaveSamples> {
+        encoder_outputs.infer_decoder(self.decoder_model.as_ref())
+    }
+}
+
+impl VitsModelCommons for VitsStreamingModel {
+    fn get_synth_config(&self) -> &RwLock<SynthesisConfig> {
+        &self.synth_config
+    }
+    fn get_config(&self) -> &ModelConfig {
+        &self.config
+    }
+    fn get_speaker_map(&self) -> &HashMap<i64, String> {
+        &self.speaker_map
+    }
+    fn get_tashkeel_engine(&self) -> Option<&libtashkeel_base::DynamicInferenceEngine> {
+        self.tashkeel_engine.as_ref()
+    }
+}
+
+impl PiperModel for VitsStreamingModel {
+    fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes> {
+        self.do_phonemize_text(text)
+    }
+
+    fn speak_batch(&self, phoneme_batches: Vec<String>) -> PiperResult<Vec<PiperWaveSamples>> {
+        let (pad_id, bos_id, eos_id) = self.get_meta_ids();
+        let phoneme_batches = Vec::from_iter(
+            phoneme_batches
+                .into_iter()
+                .map(|phonemes| self.phonemes_to_input_ids(&phonemes, pad_id, bos_id, eos_id)),
+        );
+        let mut retval = Vec::new();
+        for phonemes in phoneme_batches.into_iter() {
+            retval.push(self.infer_with_values(phonemes)?);
+        }
+        Ok(retval)
+    }
+    fn speak_one_sentence(&self, phonemes: String) -> PiperWaveResult {
+        let (pad_id, bos_id, eos_id) = self.get_meta_ids();
+        let phonemes = self.phonemes_to_input_ids(&phonemes, pad_id, bos_id, eos_id);
+        self.infer_with_values(phonemes)
+    }
+    fn wave_info(&self) -> PiperResult<PiperWaveInfo> {
+        self.get_wave_info()
+    }
+    fn stream_synthesis<'a>(
+        &'a self,
+        phonemes: String,
+        chunk_size: u32,
+        chunk_padding: u32,
+    ) -> PiperResult<Box<dyn Iterator<Item = PiperResult<RawWaveSamples>> + 'a>> {
+        let (pad_id, bos_id, eos_id) = self.get_meta_ids();
+        let phonemes = self.phonemes_to_input_ids(&phonemes, pad_id, bos_id, eos_id);
+        let encoder_outputs = self.infer_encoder(phonemes)?;
+        let streamer = Box::new(SpeechStreamer {
+            decoder_model: Arc::clone(&self.decoder_model),
+            encoder_outputs,
+            chunk_size,
+            chunk_padding
+        });
+        Ok(streamer)
+    }
+}
+
+impl VitsVoice for VitsStreamingModel {}
+
+struct EncoderOutputs<'a> {
+    values: OnceCell<ManuallyDrop<Vec<Value<'static>>>>,
+    z: OrtOwnedTensor<'a, f32, Dim<IxDynImpl>>,
+    y_mask: OrtOwnedTensor<'a, f32, Dim<IxDynImpl>>,
+    g: Array<f32, Dim<IxDynImpl>>,
+}
+
+impl<'a> EncoderOutputs<'a> {
+    fn new(values: ManuallyDrop<Vec<Value<'static>>>) -> PiperResult<Self> {
+        let z: OrtOwnedTensor<f32, _> = match values[0].try_extract() {
+            Ok(out) => out,
+            Err(e) => {
+                return Err(PiperError::OperationError(format!(
+                    "Failed to run model inference. Error: {}",
+                    e
+                )))
+            }
+        };
+        let y_mask: OrtOwnedTensor<f32, _> = match values[1].try_extract() {
+            Ok(out) => out,
+            Err(e) => {
+                return Err(PiperError::OperationError(format!(
+                    "Failed to run model inference. Error: {}",
+                    e
+                )))
+            }
+        };
+        let g = if values.len() == 3 {
+            let g_t: OrtOwnedTensor<f32, _> = match values[2].try_extract() {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(PiperError::OperationError(format!(
+                        "Failed to run model inference. Error: {}",
+                        e
+                    )))
+                }
+            };
+            g_t.view().clone().into_owned()
+        } else {
+            Array1::<f32>::from_iter([]).into_dyn()
+        };
+        Ok(Self {
+            values: OnceCell::with_value(values),
+            z,
+            y_mask,
+            g,
+        })
+    }
+    fn infer_decoder(&self, session: &ort::Session) -> PiperResult<RawWaveSamples> {
+        let outputs: Vec<Value> = {
+            let z_view = self.z.view();
+            let y_mask_view = self.y_mask.view();
+            let z_input = CowArray::from(z_view.view());
+            let y_mask_input = CowArray::from(y_mask_view.view());
+            let g_input = CowArray::from(self.g.view());
+            let mut inputs = vec![
+                Value::from_array(session.allocator(), &z_input).unwrap(),
+                Value::from_array(session.allocator(), &y_mask_input).unwrap(),
+            ];
+            if !g_input.is_empty() {
+                inputs.push(Value::from_array(session.allocator(), &g_input).unwrap())
+            }
+            match session.run(inputs) {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(PiperError::OperationError(format!(
+                        "Failed to run model inference. Error: {}",
+                        e
+                    )))
+                }
+            }
+        };
+        match outputs[0].try_extract() {
+            Ok(out) => audio_float_to_i16(out.view().view()),
+            Err(e) => Err(PiperError::OperationError(format!(
+                "Failed to run model inference. Error: {}",
+                e
+            ))),
+        }
+    }
+}
+
+impl<'a> Drop for EncoderOutputs<'a> {
+    fn drop(&mut self) {
+        if let Some(values) = self.values.take() {
+            ManuallyDrop::into_inner(values);
+        }
+    }
+}
+
+struct SpeechStreamer<'a> {
+    decoder_model: Arc<ort::Session>,
+    encoder_outputs: EncoderOutputs<'a>,
+    chunk_size: u32,
+    chunk_padding: u32
+}
+
+impl<'a> Iterator for SpeechStreamer<'a> {
+    type Item = PiperResult<RawWaveSamples>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        todo!()
+    }
 }
