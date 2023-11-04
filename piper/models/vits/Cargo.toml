@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 espeak-phonemizer = { path = "../../../espeak-phonemizer" }
+fundsp = { version = "0.15.0", default-features = false }
 piper-core = { path = "../../core" }
 ndarray = "0.15.6"
 ndarray-stats = "0.5.1"

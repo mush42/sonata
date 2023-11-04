@@ -1,7 +1,9 @@
 mod utils;
 
 use once_cell::sync::{Lazy, OnceCell};
-use piper_core::{PiperError, PiperModel, PiperResult, PiperWaveResult, PiperWaveSamples};
+use piper_core::{
+    PiperError, PiperModel, PiperResult, PiperWaveResult, PiperWaveSamples, RawWaveSamples,
+};
 use rayon::prelude::*;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::collections::vec_deque::VecDeque;
@@ -13,7 +15,7 @@ const PITCH_RANGE: (f32, f32) = (0.5f32, 1.5f32);
 /// Batch size when using batched synthesis mode
 const SPEECH_STREAM_BATCH_SIZE: usize = 4;
 
-static SYNTHESIS_THREAD_POOL: Lazy<ThreadPool> = Lazy::new(|| {
+pub static SYNTHESIS_THREAD_POOL: Lazy<ThreadPool> = Lazy::new(|| {
     ThreadPoolBuilder::new()
         .thread_name(|i| format!("piper_synth_{}", i))
         .num_threads(num_cpus::get())
@@ -31,17 +33,26 @@ pub struct AudioOutputConfig {
 
 impl AudioOutputConfig {
     fn apply(&self, mut audio: PiperWaveSamples) -> PiperWaveResult {
-        let input_len = audio.len();
-        if input_len == 0 {
-            return Ok(audio);
-        }
         let samples = std::mem::take(&mut audio.samples);
+        let mut samples =
+            self.apply_on_raw_samples(samples, audio.info.sample_rate, audio.info.num_channels)?;
+        audio.samples.as_mut_vec().append(samples.as_mut_vec());
+        Ok(audio)
+    }
+    fn apply_on_raw_samples(
+        &self,
+        samples: RawWaveSamples,
+        sample_rate: usize,
+        num_channels: usize,
+    ) -> PiperResult<RawWaveSamples> {
+        let samples = samples.to_vec();
+        let input_len = samples.len();
+        if input_len == 0 {
+            return Ok(samples.into());
+        }
         let mut out_buf: Vec<i16> = Vec::new();
         unsafe {
-            let stream = sonic_sys::sonicCreateStream(
-                audio.info.sample_rate as i32,
-                audio.info.num_channels as i32,
-            );
+            let stream = sonic_sys::sonicCreateStream(sample_rate as i32, num_channels as i32);
             if let Some(rate) = self.rate {
                 sonic_sys::sonicSetSpeed(
                     stream,
@@ -60,7 +71,7 @@ impl AudioOutputConfig {
                     utils::percent_to_param(pitch, PITCH_RANGE.0, PITCH_RANGE.1),
                 );
             }
-            sonic_sys::sonicWriteShortToStream(stream, samples.as_vec().as_ptr(), input_len as i32);
+            sonic_sys::sonicWriteShortToStream(stream, samples.as_ptr(), input_len as i32);
             sonic_sys::sonicFlushStream(stream);
             let num_samples = sonic_sys::sonicSamplesAvailable(stream);
             if num_samples <= 0 {
@@ -78,11 +89,10 @@ impl AudioOutputConfig {
             out_buf.set_len(num_samples as usize);
         }
         if let Some(time_ms) = self.appended_silence_ms {
-            let num_samples = (time_ms * audio.info.sample_rate as u32) / 1000u32;
+            let num_samples = (time_ms * sample_rate as u32) / 1000u32;
             out_buf.append(&mut vec![0i16; num_samples as usize]);
         };
-        audio.samples = out_buf.into();
-        Ok(audio)
+        Ok(out_buf.into())
     }
 }
 
@@ -134,6 +144,26 @@ impl PiperSpeechSynthesizer {
             batch_size,
         )
     }
+    pub fn synthesize_streamed(
+        &self,
+        text: String,
+        output_config: Option<AudioOutputConfig>,
+        chunk_size: usize,
+        chunk_padding: usize,
+    ) -> PiperResult<RealtimeSpeechStream> {
+        let phonemes = self.0.phonemize_text(&text)?;
+        let stream = self
+            .0
+            .stream_synthesis(phonemes.to_string(), chunk_size, chunk_padding)?;
+        let wavinfo = self.0.wave_info()?;
+        Ok(RealtimeSpeechStream {
+            stream,
+            output_config,
+            sample_rate: wavinfo.sample_rate,
+            num_channels: wavinfo.num_channels,
+        })
+    }
+
     pub fn synthesize_to_file(
         &self,
         filename: &str,
@@ -216,8 +246,8 @@ impl Iterator for PiperSpeechStreamLazy {
     type Item = PiperWaveResult;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let next_batch = self.sentence_phonemes.next()?;
-        match self.provider.process_one_sentence(next_batch) {
+        let phonemes = self.sentence_phonemes.next()?;
+        match self.provider.process_one_sentence(phonemes) {
             Ok(ws) => Some(Ok(ws)),
             Err(e) => Some(Err(e)),
         }
@@ -330,5 +360,41 @@ impl SpeechSynthesisChannel {
     }
     fn get(&mut self) -> Option<PiperWaveResult> {
         self.task_queue.pop_front().map(|task| task.get_result())
+    }
+}
+
+pub struct RealtimeSpeechStream<'a> {
+    stream: Box<dyn Iterator<Item = PiperResult<RawWaveSamples>>  + Send + Sync + 'a>,
+    output_config: Option<AudioOutputConfig>,
+    sample_rate: usize,
+    num_channels: usize,
+}
+
+impl<'a> RealtimeSpeechStream<'a> {
+    fn apply_audio_output_config(
+        &self,
+        wav_result: PiperResult<RawWaveSamples>,
+    ) -> PiperResult<RawWaveSamples> {
+        if let Some(ref output_config) = self.output_config {
+            output_config.apply_on_raw_samples(wav_result?, self.sample_rate, self.num_channels)
+        } else {
+            wav_result
+        }
+    }
+}
+
+impl<'a> Iterator for RealtimeSpeechStream<'a> {
+    type Item = PiperResult<RawWaveSamples>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.stream
+            .next()
+            .map(|res| self.apply_audio_output_config(res))
+    }
+}
+
+impl std::fmt::Debug for RealtimeSpeechStream<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "RealtimeSpeechStream Iterator")
     }
 }

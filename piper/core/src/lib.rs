@@ -79,6 +79,9 @@ impl RawWaveSamples {
     pub fn as_vec(&self) -> &Vec<i16> {
         &self.0
     }
+    pub fn as_mut_vec(&mut self) -> &mut Vec<i16> {
+        &mut self.0
+    }
 
     pub fn to_vec(self) -> Vec<i16> {
         self.0
@@ -193,15 +196,18 @@ impl IntoIterator for PiperWaveSamples {
 }
 
 pub trait PiperModel {
+
     fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes>;
     fn speak_batch(&self, phoneme_batches: Vec<String>) -> PiperResult<Vec<PiperWaveSamples>>;
     fn speak_one_sentence(&self, phonemes: String) -> PiperWaveResult;
+
+    fn supports_streaming_output(&self) -> bool { false }
     fn stream_synthesis<'a>(
         &'a self,
         #[allow(unused_variables)] phonemes: String,
-        #[allow(unused_variables)] chunk_size: u32,
-        #[allow(unused_variables)] chunk_padding: u32,
-    ) -> PiperResult<Box<dyn Iterator<Item = PiperResult<RawWaveSamples>> + 'a>>
+        #[allow(unused_variables)] chunk_size: usize,
+        #[allow(unused_variables)] chunk_padding: usize,
+    ) -> PiperResult<Box<dyn Iterator<Item = PiperResult<RawWaveSamples>> + Send + Sync + 'a>>
     {
         Ok(Box::new([        Err(PiperError::OperationError(
             "Streaming synthesis is not supported for this model".to_string(),

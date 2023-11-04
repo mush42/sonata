@@ -25,6 +25,9 @@ service piper_grpc {
 
   // Synthesize utterance
   rpc SynthesizeUtterance(Utterance) returns (stream SynthesisResult) {}
+
+  // Synthesize utterance in realtime
+  rpc SynthesizeUtteranceRealtime(Utterance) returns (stream WaveSamples) {}
 }
 
 enum SynthesisMode {
@@ -58,6 +61,7 @@ message VoiceInfo {
   AudioInfo audio = 4;
   optional string language = 5;
   optional Quality quality = 6;
+  optional bool supports_streaming_output = 7;
 }
 
 message VoicePath {
@@ -95,6 +99,10 @@ message AudioInfo {
 message SynthesisResult {
   bytes wav_samples = 1;
   float rtf = 2;
+}
+
+message WaveSamples {
+  bytes wav_samples = 1;
 }
 
 message SpeechArgs {

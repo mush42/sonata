@@ -1,13 +1,15 @@
-use piper_core::{PiperError, PiperWaveSamples, PiperWaveInfo, PiperModel};
+#![feature(trait_upcasting)]
+
+use once_cell::sync::OnceCell;
+use piper_core::{PiperError, PiperWaveInfo, PiperWaveSamples, RawWaveSamples};
 use piper_synth::{
     AudioOutputConfig, PiperSpeechStreamBatched, PiperSpeechStreamLazy, PiperSpeechStreamParallel,
-    PiperSpeechSynthesizer,
+    PiperSpeechSynthesizer, SYNTHESIS_THREAD_POOL,
 };
-use piper_vits::VitsModel;
-use once_cell::sync::OnceCell;
+use piper_vits::VitsVoice;
+use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
-use pyo3::create_exception;
 use pyo3::types::PyBytes;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -16,7 +18,12 @@ use std::sync::Arc;
 type PyPiperResult<T> = Result<T, PyPiperError>;
 static ORT_ENVIRONMENT: OnceCell<Arc<ort::Environment>> = OnceCell::new();
 
-create_exception!(piper, PiperException, PyException, "Base Exception for all exceptions raised by piper.");
+create_exception!(
+    piper,
+    PiperException,
+    PyException,
+    "Base Exception for all exceptions raised by piper."
+);
 
 struct PyPiperError(PiperError);
 
@@ -57,7 +64,6 @@ impl From<PiperWaveInfo> for PyWaveInfo {
         Self(other)
     }
 }
-
 
 #[pyclass(weakref, module = "piper", frozen)]
 #[pyo3(name = "AudioOutputConfig")]
@@ -220,8 +226,35 @@ impl BatchedSpeechStream {
 }
 
 #[pyclass(weakref, module = "piper")]
+struct RealtimeSpeechStream(std::sync::mpsc::IntoIter<PyPiperResult<RawWaveSamples>>);
+
+impl RealtimeSpeechStream {
+    fn new(receiver: std::sync::mpsc::Receiver<PyPiperResult<RawWaveSamples>>) -> Self {
+        Self(receiver.into_iter())
+    }
+}
+
+#[pymethods]
+impl RealtimeSpeechStream {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&mut self, py: Python) -> Option<PyObject> {
+        let result = py.allow_threads(|| self.0.next())?;
+        match result {
+            Ok(samples) => Some(PyBytes::new(py, &samples.as_wave_bytes()).into()),
+            Err(e) => {
+                PyErr::from(e).restore(py);
+                None
+            }
+        }
+    }
+}
+
+#[pyclass(weakref, module = "piper")]
 #[pyo3(name = "VitsModel")]
-struct PyVitsModel(Arc<VitsModel>);
+struct PyVitsModel(Arc<dyn VitsVoice + Send + Sync>);
 
 impl PyVitsModel {
     fn get_ort_environment() -> &'static Arc<ort::Environment> {
@@ -229,9 +262,7 @@ impl PyVitsModel {
             Arc::new(
                 ort::Environment::builder()
                     .with_name("piper")
-                    .with_execution_providers([
-                        ort::ExecutionProvider::CPU(Default::default())
-                    ])
+                    .with_execution_providers([ort::ExecutionProvider::CPU(Default::default())])
                     .build()
                     .unwrap(),
             )
@@ -242,9 +273,10 @@ impl PyVitsModel {
 #[pymethods]
 impl PyVitsModel {
     #[new]
-    fn new(config_path: &str, model_path: &str) -> PyPiperResult<Self> {
-        let vits = VitsModel::new(PathBuf::from(config_path), PathBuf::from(model_path), Self::get_ort_environment())?;
-        Ok(Self(Arc::new(vits)))
+    fn new(config_path: &str) -> PyPiperResult<Self> {
+        let vits =
+            piper_vits::from_config_path(&PathBuf::from(config_path), Self::get_ort_environment())?;
+        Ok(Self(vits))
     }
     #[getter]
     fn speakers(&self) -> PyPiperResult<HashMap<i64, String>> {
@@ -285,20 +317,17 @@ impl PyVitsModel {
     fn get_wave_output_info(&self) -> PyPiperResult<PyWaveInfo> {
         Ok(self.0.wave_info()?.into())
     }
-    fn get_input_output_info(&self) -> PyPiperResult<String> {
-        Ok(self.0.get_input_output_info()?.join("\n"))
-    }
 }
 
 #[pyclass(weakref, module = "piper", frozen)]
-struct Piper(PiperSpeechSynthesizer);
+struct Piper(Arc<PiperSpeechSynthesizer>);
 
 #[pymethods]
 impl Piper {
     #[staticmethod]
     fn with_vits(vits_model: &PyVitsModel) -> PyPiperResult<Self> {
         let model = Arc::clone(&vits_model.0);
-        let synthesizer = PiperSpeechSynthesizer::new(model)?;
+        let synthesizer = Arc::new(PiperSpeechSynthesizer::new(model)?);
         Ok(Self(synthesizer))
     }
     fn synthesize(
@@ -341,6 +370,37 @@ impl Piper {
             .0
             .synthesize_batched(text, audio_output_config.map(|o| o.into()), batch_size)?
             .into())
+    }
+
+    fn synthesize_streamed(
+        &self,
+        text: String,
+        audio_output_config: Option<PyAudioOutputConfig>,
+        chunk_size: Option<usize>,
+        chunk_padding: Option<usize>,
+    ) -> PyPiperResult<RealtimeSpeechStream> {
+        let synth = Arc::clone(&self.0);
+        let (tx, rx) = std::sync::mpsc::channel::<PyPiperResult<RawWaveSamples>>();
+        SYNTHESIS_THREAD_POOL.spawn_fifo(move || {
+            let stream_result = synth.synthesize_streamed(
+                text,
+                audio_output_config.map(|o| o.into()),
+                chunk_size.unwrap_or(45),
+                chunk_padding.unwrap_or(3),
+            );
+            let stream = match stream_result {
+                Ok(stream) => stream,
+                Err(e) => {
+                    tx.send(Err(e.into())).unwrap();
+                    return;
+                }
+            };
+            for result in stream {
+                let samples: PyPiperResult<RawWaveSamples> = result.map_err(|e| e.into());
+                tx.send(samples).unwrap();
+            }
+        });
+        Ok(RealtimeSpeechStream::new(rx))
     }
 
     fn synthesize_to_file(

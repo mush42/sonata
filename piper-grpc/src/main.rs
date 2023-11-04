@@ -3,7 +3,7 @@
 use once_cell::sync::OnceCell;
 use pgrpc::piper_grpc_server::{PiperGrpc, PiperGrpcServer};
 use piper_core::{PiperError, PiperResult};
-use piper_synth::{AudioOutputConfig, PiperSpeechStreamBatched, PiperSpeechSynthesizer};
+use piper_synth::{SYNTHESIS_THREAD_POOL, AudioOutputConfig, PiperSpeechStreamLazy, PiperSpeechSynthesizer};
 use piper_vits::VitsVoice;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -64,13 +64,13 @@ impl From<PiperGrpcError> for Status {
 
 struct Voice {
     model: Arc<dyn VitsVoice>,
-    synth: PiperSpeechSynthesizer,
+    synth: Arc<PiperSpeechSynthesizer>,
 }
 
 impl Voice {
     fn new(model: Arc<dyn VitsVoice + Send + Sync>) -> PiperResult<Self> {
         let model_clone = Arc::clone(&model);
-        let synth = PiperSpeechSynthesizer::new(model_clone)?;
+        let synth = Arc::new(PiperSpeechSynthesizer::new(model_clone)?);
         Ok(Self { model, synth })
     }
 }
@@ -120,6 +120,22 @@ impl PiperGrpcService {
         (self.0.write().unwrap()).insert(voice_id, voice);
         Ok(voice_info)
     }
+    fn _create_speech_synthesis_stream(
+        &self,
+        voice_id: &str,
+        text: String,
+        output_config: Option<AudioOutputConfig>,
+    ) -> PiperGrpcResult<PiperSpeechStreamLazy> {
+        match (self.0.read().unwrap()).get(voice_id) {
+            Some(voice) => Ok(voice
+                .synth
+                .synthesize_lazy(text, output_config)?),
+            None => Err(PiperGrpcError::VoiceNotFound(format!(
+                "A voice with the key `{}` has not been loaded",
+                voice_id
+            ))),
+        }
+    }
     fn _get_voice_info(
         &self,
         voice_id: String,
@@ -157,24 +173,8 @@ impl PiperGrpcService {
             speakers,
             audio: Some(audio_info),
             quality: quality.map(|q| q.into()),
+            supports_streaming_output: Some(vits_model.supports_streaming_output())
         })
-    }
-    fn _create_speech_synthesis_stream(
-        &self,
-        voice_id: &str,
-        text: String,
-        output_config: Option<AudioOutputConfig>,
-        batch_size: Option<usize>,
-    ) -> PiperGrpcResult<PiperSpeechStreamBatched> {
-        match (self.0.read().unwrap()).get(voice_id) {
-            Some(voice) => Ok(voice
-                .synth
-                .synthesize_batched(text, output_config, batch_size)?),
-            None => Err(PiperGrpcError::VoiceNotFound(format!(
-                "A voice with the key `{}` has not been loaded",
-                voice_id
-            ))),
-        }
     }
     fn _get_synth_options_from_model(
         &self,
@@ -310,25 +310,69 @@ impl PiperGrpc for PiperGrpcService {
             appended_silence_ms: args.appended_silence_ms,
         });
         let piper_stream =
-            self._create_speech_synthesis_stream(&req.voice_id, req.text, output_config, None)?;
-        let (tx, rx) = mpsc::channel(4);
-        tokio::spawn(async move {
+            self._create_speech_synthesis_stream(&req.voice_id, req.text, output_config)?;
+        let (tx, rx) = mpsc::channel(512);
+        SYNTHESIS_THREAD_POOL.spawn_fifo (move || {
             for wav_result in piper_stream {
                 let wav = match wav_result {
                     Ok(wav) => wav,
                     Err(e) => {
                         let err = Err(PiperGrpcError::from(e).into());
-                        tx.send(err).await.ok();
-                        // Stop this stream here. No retrys
-                        return;
+                        tx.blocking_send (err).ok();
+                        return
                     }
                 };
                 let synth_result = pgrpc::SynthesisResult {
                     wav_samples: wav.as_wave_bytes(),
                     rtf: wav.real_time_factor().unwrap_or_default(),
                 };
-                // We can do nothing about this error
-                tx.send(Ok(synth_result)).await.ok();
+                if tx.blocking_send (Ok(synth_result)).is_err() {
+                    return;
+                }
+            }
+        });
+        Ok(Response::new(ReceiverStream::new(rx)))
+    }
+    type SynthesizeUtteranceRealtimeStream = ReceiverStream<Result<pgrpc::WaveSamples, Status>>;
+    async fn synthesize_utterance_realtime(
+        &self,
+        _request: Request<pgrpc::Utterance>,
+    ) -> Result<Response<Self::SynthesizeUtteranceRealtimeStream>, Status> {
+        let req = _request.into_inner();
+        let output_config = req.speech_args.map(|args| AudioOutputConfig {
+            rate: args.rate.map(|i| i as u8),
+            volume: args.volume.map(|i| i as u8),
+            pitch: args.pitch.map(|i| i as u8),
+            appended_silence_ms: args.appended_silence_ms,
+        });
+        let voice = self.0.read().unwrap();
+        let synth = Arc::clone(&voice.get(&req.voice_id).unwrap().synth);
+        let (tx, rx) = mpsc::channel(512);
+        SYNTHESIS_THREAD_POOL.spawn_fifo (move || {
+            let stream_result = synth
+                .synthesize_streamed(req.text, output_config, 75, 5);
+            let realtime_speech_stream = match stream_result {
+                Ok(stream) => stream,
+                Err(e) => {
+                    let err = Err(PiperGrpcError::from(e).into());
+                    tx.blocking_send (err).ok();
+                    return;
+                }
+            };
+            for wav_result in realtime_speech_stream {
+                let wav = match wav_result {
+                    Ok(wav) => wav,
+                    Err(e) => {
+                        let err = Err(PiperGrpcError::from(e).into());
+                        tx.blocking_send (err).ok();
+                        return
+                    }
+                };
+                let synth_result = pgrpc::WaveSamples { wav_samples: wav.as_wave_bytes() };
+                let send_error = tx.blocking_send (Ok(synth_result)).is_err();
+                if send_error {
+                    return;
+                }
             }
         });
         Ok(Response::new(ReceiverStream::new(rx)))
