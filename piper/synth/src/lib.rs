@@ -18,9 +18,12 @@ const PITCH_RANGE: (f32, f32) = (0.5f32, 1.5f32);
 const SPEECH_STREAM_BATCH_SIZE: usize = 4;
 
 pub static SYNTHESIS_THREAD_POOL: Lazy<ThreadPool> = Lazy::new(|| {
+    let num_cpus = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(4);
     ThreadPoolBuilder::new()
         .thread_name(|i| format!("piper_synth_{}", i))
-        .num_threads(num_cpus::get())
+        .num_threads(num_cpus * 3)
         .build()
         .unwrap()
 });

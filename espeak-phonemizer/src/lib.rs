@@ -69,6 +69,23 @@ pub fn text_to_phonemes(
     remove_lang_switch_flags: bool,
     remove_stress: bool,
 ) -> ESpeakResult<Vec<String>> {
+    let mut phonemes = Vec::new();
+    for line in text.lines() {
+        phonemes.append(&mut _text_to_phonemes(
+            line, language, phoneme_separator, remove_lang_switch_flags, remove_stress
+        )?)
+    }
+    Ok(phonemes)
+}
+
+
+pub fn _text_to_phonemes(
+    text: &str,
+    language: &str,
+    phoneme_separator: Option<char>,
+    remove_lang_switch_flags: bool,
+    remove_stress: bool,
+) -> ESpeakResult<Vec<String>> {
     if let Err(ref e) = Lazy::force(&ESPEAKNG_INIT) {
         return Err(e.clone());
     }
@@ -220,6 +237,13 @@ mod tests {
         let without_stress = text_to_phonemes(TEXT_ALICE, "en-US", None, false, true)?.join("");
         assert_eq!(without_stress.contains(stress_markers), false);
 
+        Ok(())
+    }
+    #[test]
+    fn test_line_splitting() -> ESpeakResult<()> {
+        let text = "Hello\nThere\nAnd\nWelcome";
+        let phoneme_paragraphs = text_to_phonemes(text, "en-US", None, false, false)?;
+        assert_eq!(phoneme_paragraphs.len(), 4);
         Ok(())
     }
 }

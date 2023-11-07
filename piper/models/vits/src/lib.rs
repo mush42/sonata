@@ -25,7 +25,12 @@ const EOS: char = '$';
 const PAD: char = '_';
 
 #[allow(dead_code)]
-static CPU_COUNT: Lazy<i16> = Lazy::new(|| num_cpus::get().try_into().unwrap_or(4));
+static CPU_COUNT: Lazy<i16> = Lazy::new(|| {
+    std::thread::available_parallelism()
+        .map(usize::from)
+        .map(|n| n.try_into().unwrap())
+        .unwrap_or(4)
+});
 
 #[inline(always)]
 fn reversed_mapping<K, V>(input: &HashMap<K, V>) -> HashMap<V, K>
@@ -918,7 +923,7 @@ impl<'a> SpeechStreamer<'a> {
                 let audio_idx =
                     ndarray::Slice::new(start_padding * 256, end_padding.map(|v| v * 256), 1);
                 let audio_f32 = audio_view.slice_axis(ndarray::Axis(2), audio_idx);
-                let mut wave = Wave32::from_samples(44100.0, audio_f32.as_slice().unwrap());
+                let mut wave = Wave32::from_samples(22050.0, audio_f32.as_slice().unwrap());
                 let fade_ms = 0.002;
                 if fade_ms <= wave.duration() {
                     wave.fade(fade_ms);
