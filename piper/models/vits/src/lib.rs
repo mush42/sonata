@@ -11,6 +11,7 @@ use piper_core::{
     PiperWaveSamples, RawWaveSamples,
 };
 use serde::Deserialize;
+use std::any::Any;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
@@ -55,12 +56,12 @@ fn audio_float_to_i16(audio_f32: ArrayView<f32, Dim<IxDynImpl>>) -> PiperResult<
     let samples = Vec::from_iter(
         audio_f32
             .iter()
-            .map(|i| (i * audio_scale).clamp(i16::MIN as f32, i16::MAX as f32) as i16)
+            .map(|i| (i * audio_scale).clamp(i16::MIN as f32, i16::MAX as f32) as i16),
     );
     Ok(samples.into())
 }
 
-fn load_model_config(config_path: &Path) -> PiperResult<(ModelConfig, SynthesisConfig)> {
+fn load_model_config(config_path: &Path) -> PiperResult<(ModelConfig, VitsSynthesisConfig)> {
     let file = match File::open(config_path) {
         Ok(file) => file,
         Err(why) => {
@@ -81,7 +82,7 @@ fn load_model_config(config_path: &Path) -> PiperResult<(ModelConfig, SynthesisC
             )))
         }
     };
-    let synth_config = SynthesisConfig {
+    let synth_config = VitsSynthesisConfig {
         speaker: None,
         noise_scale: model_config.inference.noise_scale,
         length_scale: model_config.inference.length_scale,
@@ -120,7 +121,7 @@ fn create_inference_session(
 pub fn from_config_path(
     config_path: &Path,
     ort_env: &'static Arc<Environment>,
-) -> PiperResult<Arc<dyn VitsVoice + Send + Sync>> {
+) -> PiperResult<Arc<dyn PiperModel + Send + Sync>> {
     let (config, synth_config) = load_model_config(config_path)?;
     if config.streaming.unwrap_or_default() {
         Ok(Arc::new(VitsStreamingModel::from_config(
@@ -195,15 +196,15 @@ pub struct ModelConfig {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct SynthesisConfig {
-    pub speaker: Option<(String, i64)>,
+pub struct VitsSynthesisConfig {
+    pub speaker: Option<i64>,
     pub noise_scale: f32,
     pub length_scale: f32,
     pub noise_w: f32,
 }
 
-pub trait VitsModelCommons {
-    fn get_synth_config(&self) -> &RwLock<SynthesisConfig>;
+trait VitsModelCommons {
+    fn get_synth_config(&self) -> &RwLock<VitsSynthesisConfig>;
     fn get_config(&self) -> &ModelConfig;
     fn get_speaker_map(&self) -> &HashMap<i64, String>;
     fn get_tashkeel_engine(&self) -> Option<&libtashkeel_base::DynamicInferenceEngine>;
@@ -220,22 +221,25 @@ pub trait VitsModelCommons {
             .as_ref()
             .map(|lang| lang.code.clone())
     }
-    fn quality(&self) -> Option<String> {
-        self.get_config().audio.quality.as_ref().cloned()
+    fn get_properties(&self) -> HashMap<String, String> {
+        HashMap::from([(
+            "quality".to_string(),
+            self.get_config()
+                .audio
+                .quality
+                .clone()
+                .unwrap_or("unknown".to_string()),
+        )])
     }
-    fn default_synthesis_config(&self) -> SynthesisConfig {
+    fn factory_synthesis_config(&self) -> VitsSynthesisConfig {
         let config = self.get_config();
 
         let speaker = if config.num_speakers > 0 {
-            self.get_speaker_map()
-                .get(&0)
-                .as_ref()
-                .cloned()
-                .map(|name| (name.clone(), 0))
+            Some(0)
         } else {
             None
         };
-        SynthesisConfig {
+        VitsSynthesisConfig {
             speaker,
             length_scale: config.inference.length_scale,
             noise_scale: config.inference.noise_scale,
@@ -245,59 +249,21 @@ pub trait VitsModelCommons {
     fn speakers(&self) -> PiperResult<HashMap<i64, String>> {
         Ok(self.get_speaker_map().clone())
     }
-    fn get_speaker(&self) -> PiperResult<Option<String>> {
-        if self.get_config().num_speakers == 0 {
-            return Err(PiperError::OperationError(
-                "This model is a single speaker model.".to_string(),
-            ));
+    fn _do_set_default_synth_config(&self, new_config: &VitsSynthesisConfig) -> PiperResult<()> {
+        let mut synth_config = self.get_synth_config().write().unwrap();
+        synth_config.length_scale = new_config.length_scale;
+        synth_config.noise_scale = new_config.noise_scale;
+        synth_config.noise_w = new_config.noise_w;
+        if let Some(sid) = new_config.speaker {
+            if self.get_speaker_map().contains_key(&sid) {
+                synth_config.speaker = Some(sid);
+            } else {
+                return Err(PiperError::OperationError(format!(
+                    "No speaker was found with the given id `{}`",
+                    sid
+                )));
+            }
         }
-        if let Some(ref speaker) = self.get_synth_config().read().unwrap().speaker {
-            Ok(Some(speaker.0.clone()))
-        } else {
-            let default_speaker = match self.get_speaker_map().get(&0) {
-                Some(name) => name.clone(),
-                None => "Default".to_string(),
-            };
-            Ok(Some(default_speaker))
-        }
-    }
-    fn set_speaker(&self, name: String) -> PiperResult<()> {
-        let config = self.get_config();
-        if config.num_speakers == 0 {
-            return Err(PiperError::OperationError(
-                "This model is a single speaker model.".to_string(),
-            ));
-        }
-        if let Some(sid) = config.speaker_id_map.get(&name) {
-            let mut synth_config = self.get_synth_config().write().unwrap();
-            synth_config.speaker = Some((name, *sid));
-            Ok(())
-        } else {
-            Err(PiperError::OperationError(format!(
-                "Invalid speaker name: `{}`",
-                name
-            )))
-        }
-    }
-    fn get_noise_scale(&self) -> PiperResult<f32> {
-        Ok(self.get_synth_config().read().unwrap().noise_scale)
-    }
-    fn set_noise_scale(&self, value: f32) -> PiperResult<()> {
-        self.get_synth_config().write().unwrap().noise_scale = value;
-        Ok(())
-    }
-    fn get_length_scale(&self) -> PiperResult<f32> {
-        Ok(self.get_synth_config().read().unwrap().length_scale)
-    }
-    fn set_length_scale(&self, value: f32) -> PiperResult<()> {
-        self.get_synth_config().write().unwrap().length_scale = value;
-        Ok(())
-    }
-    fn get_noise_w(&self) -> PiperResult<f32> {
-        Ok(self.get_synth_config().read().unwrap().noise_w)
-    }
-    fn set_noise_w(&self, value: f32) -> PiperResult<()> {
-        self.get_synth_config().write().unwrap().noise_w = value;
         Ok(())
     }
     fn phonemes_to_input_ids(
@@ -359,10 +325,8 @@ pub trait VitsModelCommons {
     }
 }
 
-pub trait VitsVoice: VitsModelCommons + PiperModel + Send + Sync {}
-
 pub struct VitsModel {
-    synth_config: RwLock<SynthesisConfig>,
+    synth_config: RwLock<VitsSynthesisConfig>,
     config: ModelConfig,
     speaker_map: HashMap<i64, String>,
     session: ort::Session,
@@ -384,7 +348,7 @@ impl VitsModel {
     }
     fn from_config(
         config: ModelConfig,
-        synth_config: SynthesisConfig,
+        synth_config: VitsSynthesisConfig,
         onnx_path: &Path,
         ort_env: &'static Arc<Environment>,
     ) -> PiperResult<Self> {
@@ -437,10 +401,8 @@ impl VitsModel {
         let scales = CowArray::from(scales).into_dyn();
 
         let speaker_id = if self.config.num_speakers > 1 {
-            let sid = match synth_config.speaker {
-                Some((_, sid)) => sid,
-                None => 0,
-            };
+            let sid = synth_config.speaker.unwrap_or(0);
+
             Some(CowArray::from(Array1::<i64>::from_iter([sid])).into_dyn())
         } else {
             None
@@ -508,7 +470,7 @@ impl VitsModel {
 }
 
 impl VitsModelCommons for VitsModel {
-    fn get_synth_config(&self) -> &RwLock<SynthesisConfig> {
+    fn get_synth_config(&self) -> &RwLock<VitsSynthesisConfig> {
         &self.synth_config
     }
     fn get_config(&self) -> &ModelConfig {
@@ -546,15 +508,44 @@ impl PiperModel for VitsModel {
         let phonemes = self.phonemes_to_input_ids(&phonemes, pad_id, bos_id, eos_id);
         self.infer_with_values(phonemes)
     }
+    fn get_default_synthesis_config(&self) -> PiperResult<Box<dyn Any>> {
+        Ok(Box::new(VitsSynthesisConfig {
+            speaker: Some(0),
+            noise_scale: self.config.inference.noise_scale,
+            noise_w: self.config.inference.noise_w,
+            length_scale: self.config.inference.length_scale,
+        }))
+    }
+    fn get_fallback_synthesis_config(&self) -> PiperResult<Box<dyn Any>> {
+        Ok(Box::new(self.synth_config.read().unwrap().clone()))
+    }
+    fn set_fallback_synthesis_config(&self, synthesis_config: &dyn Any) -> PiperResult<()> {
+        match synthesis_config.downcast_ref::<VitsSynthesisConfig>() {
+            Some(new_config) => self._do_set_default_synth_config(new_config),
+            None => Err(PiperError::OperationError(
+                "Invalid configuration for Vits Model".to_string(),
+            )),
+        }
+    }
+    fn get_language(&self) -> PiperResult<Option<String>> {
+        Ok(self.language())
+    }
+    fn get_speakers(&self) -> PiperResult<Option<&HashMap<i64, String>>> {
+        Ok(Some(self.get_speaker_map()))
+    }
+    fn speaker_name_to_id(&self, name: &str) -> PiperResult<Option<i64>> {
+        Ok(self.config.speaker_id_map.get(name).copied())
+    }
+    fn properties(&self) -> PiperResult<HashMap<String, String>> {
+        Ok(self.get_properties())
+    }
     fn wave_info(&self) -> PiperResult<PiperWaveInfo> {
         self.get_wave_info()
     }
 }
 
-impl VitsVoice for VitsModel {}
-
 pub struct VitsStreamingModel {
-    synth_config: RwLock<SynthesisConfig>,
+    synth_config: RwLock<VitsSynthesisConfig>,
     config: ModelConfig,
     speaker_map: HashMap<i64, String>,
     encoder_model: ort::Session,
@@ -565,7 +556,7 @@ pub struct VitsStreamingModel {
 impl VitsStreamingModel {
     fn from_config(
         config: ModelConfig,
-        synth_config: SynthesisConfig,
+        synth_config: VitsSynthesisConfig,
         encoder_path: &Path,
         decoder_path: &Path,
         ort_env: &'static Arc<Environment>,
@@ -629,10 +620,8 @@ impl VitsStreamingModel {
         let scales = CowArray::from(scales).into_dyn();
 
         let speaker_id = if self.config.num_speakers > 1 {
-            let sid = match synth_config.speaker {
-                Some((_, sid)) => sid,
-                None => 0,
-            };
+            let sid = synth_config.speaker.unwrap_or(0);
+
             Some(CowArray::from(Array1::<i64>::from_iter([sid])).into_dyn())
         } else {
             None
@@ -663,7 +652,7 @@ impl VitsStreamingModel {
 }
 
 impl VitsModelCommons for VitsStreamingModel {
-    fn get_synth_config(&self) -> &RwLock<SynthesisConfig> {
+    fn get_synth_config(&self) -> &RwLock<VitsSynthesisConfig> {
         &self.synth_config
     }
     fn get_config(&self) -> &ModelConfig {
@@ -700,16 +689,49 @@ impl PiperModel for VitsStreamingModel {
         let phonemes = self.phonemes_to_input_ids(&phonemes, pad_id, bos_id, eos_id);
         self.infer_with_values(phonemes)
     }
+    fn get_default_synthesis_config(&self) -> PiperResult<Box<dyn Any>> {
+        Ok(Box::new(VitsSynthesisConfig {
+            speaker: Some(0),
+            noise_scale: self.config.inference.noise_scale,
+            noise_w: self.config.inference.noise_w,
+            length_scale: self.config.inference.length_scale,
+        }))
+    }
+    fn get_fallback_synthesis_config(&self) -> PiperResult<Box<dyn Any>> {
+        Ok(Box::new(self.synth_config.read().unwrap().clone()))
+    }
+    fn set_fallback_synthesis_config(&self, synthesis_config: &dyn Any) -> PiperResult<()> {
+        match synthesis_config.downcast_ref::<VitsSynthesisConfig>() {
+            Some(new_config) => self._do_set_default_synth_config(new_config),
+            None => Err(PiperError::OperationError(
+                "Invalid configuration for Vits Model".to_string(),
+            )),
+        }
+    }
+    fn get_language(&self) -> PiperResult<Option<String>> {
+        Ok(self.language())
+    }
+    fn get_speakers(&self) -> PiperResult<Option<&HashMap<i64, String>>> {
+        Ok(Some(self.get_speaker_map()))
+    }
+    fn speaker_name_to_id(&self, name: &str) -> PiperResult<Option<i64>> {
+        Ok(self.config.speaker_id_map.get(name).copied())
+    }
+    fn properties(&self) -> PiperResult<HashMap<String, String>> {
+        Ok(self.get_properties())
+    }
     fn wave_info(&self) -> PiperResult<PiperWaveInfo> {
         self.get_wave_info()
     }
-    fn supports_streaming_output(&self) -> bool { true }
+    fn supports_streaming_output(&self) -> bool {
+        true
+    }
     fn stream_synthesis<'a>(
         &'a self,
         phonemes: String,
         chunk_size: usize,
         chunk_padding: usize,
-    ) -> PiperResult<Box<dyn Iterator<Item = PiperResult<RawWaveSamples>>  + Send + Sync + 'a>> {
+    ) -> PiperResult<Box<dyn Iterator<Item = PiperResult<RawWaveSamples>> + Send + Sync + 'a>> {
         let (pad_id, bos_id, eos_id) = self.get_meta_ids();
         let phonemes = self.phonemes_to_input_ids(&phonemes, pad_id, bos_id, eos_id);
         let encoder_outputs = self.infer_encoder(phonemes)?;
@@ -717,13 +739,11 @@ impl PiperModel for VitsStreamingModel {
             Arc::clone(&self.decoder_model),
             encoder_outputs,
             chunk_size,
-            chunk_padding
+            chunk_padding,
         ));
         Ok(streamer)
     }
 }
-
-impl VitsVoice for VitsStreamingModel {}
 
 struct EncoderOutputs<'a> {
     values: OnceCell<ManuallyDrop<Vec<Value<'static>>>>,
@@ -823,7 +843,7 @@ struct SpeechStreamer<'a> {
     chunk_enumerater: std::vec::IntoIter<usize>,
     num_frames: usize,
     num_chunks: usize,
-    one_shot: bool
+    one_shot: bool,
 }
 
 impl<'a> SpeechStreamer<'a> {
@@ -831,10 +851,10 @@ impl<'a> SpeechStreamer<'a> {
         decoder_model: Arc<ort::Session>,
         encoder_outputs: EncoderOutputs<'a>,
         chunk_size: usize,
-        chunk_padding: usize
+        chunk_padding: usize,
     ) -> Self {
         let num_frames = encoder_outputs.z.view().shape()[2];
-        let num_chunks = (num_frames  as f32 / chunk_size as f32).ceil() as usize;
+        let num_chunks = (num_frames as f32 / chunk_size as f32).ceil() as usize;
         let one_shot = num_frames <= (chunk_size + (chunk_padding * 3));
         Self {
             decoder_model,
@@ -844,19 +864,18 @@ impl<'a> SpeechStreamer<'a> {
             chunk_enumerater: Vec::from_iter(0..num_chunks).into_iter(),
             num_frames,
             num_chunks,
-            one_shot
+            one_shot,
         }
     }
     fn synthesize_chunk(&self, chunk_idx: usize) -> PiperResult<RawWaveSamples> {
         let (start_index, start_padding) = if chunk_idx == 0 {
             (0, 0)
         } else {
-            let start = (chunk_idx as isize * self.chunk_size)  - self.chunk_padding;
+            let start = (chunk_idx as isize * self.chunk_size) - self.chunk_padding;
             (start as usize, self.chunk_padding)
         };
-        let mut end_index = 
-            ((chunk_idx + 1) * self.chunk_size as usize)
-            + self.chunk_padding as usize;
+        let mut end_index =
+            ((chunk_idx + 1) * self.chunk_size as usize) + self.chunk_padding as usize;
         let end_padding: Option<isize>;
         if end_index > self.num_frames {
             end_index = self.num_frames;
@@ -896,25 +915,16 @@ impl<'a> SpeechStreamer<'a> {
         match outputs[0].try_extract() {
             Ok(out) => {
                 let audio_view = out.view();
-                let audio_idx = ndarray::Slice::new(
-                    start_padding * 256,
-                    end_padding.map(|v| v * 256),
-                    1
-                );
+                let audio_idx =
+                    ndarray::Slice::new(start_padding * 256, end_padding.map(|v| v * 256), 1);
                 let audio_f32 = audio_view.slice_axis(ndarray::Axis(2), audio_idx);
-                let mut wave = Wave32::from_samples(
-                    44100.0,
-                    audio_f32.as_slice().unwrap()
-                );
+                let mut wave = Wave32::from_samples(44100.0, audio_f32.as_slice().unwrap());
                 let fade_ms = 0.002;
                 if fade_ms <= wave.duration() {
                     wave.fade(fade_ms);
                     wave.normalize();
                 }
-                let audio_view = ArrayView::from_shape(
-                        wave.len(),
-                        wave.channel(0)
-                    )
+                let audio_view = ArrayView::from_shape(wave.len(), wave.channel(0))
                     .unwrap()
                     .into_dyn();
                 let audio = audio_float_to_i16(audio_view)?;
@@ -936,7 +946,10 @@ impl<'a> Iterator for SpeechStreamer<'a> {
         if self.one_shot {
             // Consume the iterator
             self.chunk_enumerater.nth(self.num_chunks + 1);
-            Some(self.encoder_outputs.infer_decoder(self.decoder_model.as_ref()))
+            Some(
+                self.encoder_outputs
+                    .infer_decoder(self.decoder_model.as_ref()),
+            )
         } else {
             Some(self.synthesize_chunk(chunk_idx))
         }

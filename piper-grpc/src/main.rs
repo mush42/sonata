@@ -1,10 +1,10 @@
-#![feature(trait_upcasting)]
-
 use once_cell::sync::OnceCell;
 use pgrpc::piper_grpc_server::{PiperGrpc, PiperGrpcServer};
-use piper_core::{PiperError, PiperResult};
-use piper_synth::{SYNTHESIS_THREAD_POOL, AudioOutputConfig, PiperSpeechStreamLazy, PiperSpeechSynthesizer};
-use piper_vits::VitsVoice;
+use piper_core::{PiperError, PiperModel, PiperResult};
+use piper_synth::{
+    AudioOutputConfig, PiperSpeechStreamLazy, PiperSpeechSynthesizer, SYNTHESIS_THREAD_POOL,
+};
+use piper_vits::VitsSynthesisConfig;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -62,16 +62,18 @@ impl From<PiperGrpcError> for Status {
     }
 }
 
-struct Voice {
-    model: Arc<dyn VitsVoice>,
-    synth: Arc<PiperSpeechSynthesizer>,
-}
+struct Voice(Arc<PiperSpeechSynthesizer>);
 
 impl Voice {
-    fn new(model: Arc<dyn VitsVoice + Send + Sync>) -> PiperResult<Self> {
-        let model_clone = Arc::clone(&model);
-        let synth = Arc::new(PiperSpeechSynthesizer::new(model_clone)?);
-        Ok(Self { model, synth })
+    fn new(model: Arc<dyn PiperModel + Send + Sync>) -> PiperResult<Self> {
+        let synth = Arc::new(PiperSpeechSynthesizer::new(model)?);
+        Ok(Self(synth))
+    }
+    fn model_ref(&self) -> &dyn PiperModel {
+        self.synth_ref()
+    }
+    fn synth_ref(&self) -> &PiperSpeechSynthesizer {
+        self.0.as_ref()
     }
 }
 
@@ -107,16 +109,16 @@ impl PiperGrpcService {
             )));
         };
         if let Some(voice) = (self.0.read().unwrap()).get(&voice_id) {
-            return self._get_voice_info(voice_id, voice.model.as_ref());
+            return self._get_voice_info(voice_id, voice.model_ref());
         }
         let vits_model = piper_vits::from_config_path(&config_path, Self::get_ort_environment())?;
         log::info!(
-            "Loaded voice from: `{}`. Voice ID: {}",
+            "Loaded Vits voice from: `{}`. Voice ID: {}",
             config_path.display(),
             voice_id
         );
         let voice = Voice::new(vits_model)?;
-        let voice_info = self._get_voice_info(voice_id.clone(), voice.model.as_ref())?;
+        let voice_info = self._get_voice_info(voice_id.clone(), voice.model_ref())?;
         (self.0.write().unwrap()).insert(voice_id, voice);
         Ok(voice_info)
     }
@@ -127,9 +129,7 @@ impl PiperGrpcService {
         output_config: Option<AudioOutputConfig>,
     ) -> PiperGrpcResult<PiperSpeechStreamLazy> {
         match (self.0.read().unwrap()).get(voice_id) {
-            Some(voice) => Ok(voice
-                .synth
-                .synthesize_lazy(text, output_config)?),
+            Some(voice) => Ok(voice.synth_ref().synthesize_lazy(text, output_config)?),
             None => Err(PiperGrpcError::VoiceNotFound(format!(
                 "A voice with the key `{}` has not been loaded",
                 voice_id
@@ -139,26 +139,33 @@ impl PiperGrpcService {
     fn _get_voice_info(
         &self,
         voice_id: String,
-        vits_model: &(impl VitsVoice + ?Sized),
+        model: &(impl PiperModel + ?Sized),
     ) -> PiperGrpcResult<pgrpc::VoiceInfo> {
-        let wav_info = vits_model.wave_info()?;
-        let speakers = vits_model.speakers()?;
-        let language = vits_model.language();
-        let quality = vits_model.quality().map(|q| match q.as_str() {
-            "x_low" => pgrpc::Quality::XLow,
-            "low" => pgrpc::Quality::Low,
-            "medium" => pgrpc::Quality::Medium,
-            "high" => pgrpc::Quality::High,
-            _ => pgrpc::Quality::Unspecified,
-        });
+        let wav_info = model.wave_info()?;
+        let speakers = model.get_speakers()?;
+        let language = model.get_language()?;
         let audio_info = pgrpc::AudioInfo {
             sample_rate: wav_info.sample_rate as u32,
             num_channels: wav_info.num_channels as u32,
             sample_width: wav_info.sample_width as u32,
         };
         let synth_options = {
-            let default_synth_config = vits_model.default_synthesis_config();
-            let speaker = default_synth_config.speaker.map(|(name, _idx)| name);
+            let config_cast = model
+                .get_default_synthesis_config()?
+                .downcast::<VitsSynthesisConfig>();
+            let default_synth_config = match config_cast {
+                Ok(synth_config) => synth_config,
+                Err(_) => {
+                    return Err(PiperError::OperationError(
+                        "Invalid synthesis config for Vits model".to_string(),
+                    )
+                    .into())
+                }
+            };
+            let speaker = match default_synth_config.speaker {
+                Some(ref sid) => model.speaker_id_to_name(sid)?,
+                None => Some("Default".to_string()),
+            };
             pgrpc::SynthesisOptions {
                 speaker,
                 length_scale: Some(default_synth_config.length_scale),
@@ -170,25 +177,37 @@ impl PiperGrpcService {
             voice_id,
             synth_options: Some(synth_options),
             language,
-            speakers,
+            speakers: speakers.cloned().unwrap_or_default(),
             audio: Some(audio_info),
-            quality: quality.map(|q| q.into()),
-            supports_streaming_output: Some(vits_model.supports_streaming_output())
+            supports_streaming_output: Some(model.supports_streaming_output()),
+            quality: None,
         })
     }
     fn _get_synth_options_from_model(
         &self,
-        model: &(impl VitsVoice + ?Sized),
+        model: &(impl PiperModel + ?Sized),
     ) -> PiperGrpcResult<pgrpc::SynthesisOptions> {
-        let speaker = match model.get_speaker() {
-            Ok(speaker) => speaker,
-            Err(_) => None,
+        let synth_config = match model
+            .get_fallback_synthesis_config()?
+            .downcast::<VitsSynthesisConfig>()
+        {
+            Ok(synth_config) => synth_config,
+            Err(_) => {
+                return Err(PiperError::OperationError(
+                    "Invalid synthesis config for Vits model".to_string(),
+                )
+                .into())
+            }
+        };
+        let speaker = match synth_config.speaker {
+            Some(ref sid) => model.speaker_id_to_name(sid)?,
+            None => model.speaker_id_to_name(&0)?
         };
         Ok(pgrpc::SynthesisOptions {
             speaker,
-            length_scale: Some(model.get_length_scale()?),
-            noise_scale: Some(model.get_noise_scale()?),
-            noise_w: Some(model.get_noise_w()?),
+            length_scale: Some(synth_config.length_scale),
+            noise_scale: Some(synth_config.noise_scale),
+            noise_w: Some(synth_config.noise_w),
         })
     }
     fn _get_synth_options(&self, voice_id: &str) -> PiperGrpcResult<pgrpc::SynthesisOptions> {
@@ -202,7 +221,7 @@ impl PiperGrpcService {
                 )))
             }
         };
-        self._get_synth_options_from_model(voice.model.as_ref())
+        self._get_synth_options_from_model(voice.model_ref())
     }
     fn _set_synth_options(
         &self,
@@ -219,19 +238,29 @@ impl PiperGrpcService {
                 )))
             }
         };
-        if let Some(speaker) = synth_opts.speaker {
-            voice.model.as_ref().set_speaker(speaker)?;
+        let model = voice.model_ref();
+        let mut synth_config = match model.get_fallback_synthesis_config()?.downcast::<VitsSynthesisConfig>() {
+            Ok(synth_config) => synth_config,
+            Err(_) => return Err(PiperError::OperationError(
+                "Could not set synthesis parameters ".to_string()
+            ).into())
+        };
+        if let Some(sname) = synth_opts.speaker {
+            if let Some(sid) = model.speaker_name_to_id(&sname)? {
+                synth_config.speaker = Some(sid)
+            }
         }
         if let Some(length_scale) = synth_opts.length_scale {
-            voice.model.as_ref().set_length_scale(length_scale)?;
+            synth_config.length_scale = length_scale;
         }
         if let Some(noise_scale) = synth_opts.noise_scale {
-            voice.model.as_ref().set_noise_scale(noise_scale)?;
+            synth_config.noise_scale = noise_scale;
         }
         if let Some(noise_w) = synth_opts.noise_w {
-            voice.model.as_ref().set_noise_w(noise_w)?;
+            synth_config.noise_w = noise_w;
         }
-        self._get_synth_options_from_model(voice.model.as_ref())
+        model.set_fallback_synthesis_config(synth_config.as_ref())?;
+        self._get_synth_options_from_model(model)
     }
 }
 
@@ -270,7 +299,7 @@ impl PiperGrpc for PiperGrpcService {
                 )))?
             }
         };
-        let voice_info = self._get_voice_info(voice_id, voice.model.as_ref())?;
+        let voice_info = self._get_voice_info(voice_id, voice.model_ref())?;
         Ok(Response::new(voice_info))
     }
     async fn get_synthesis_options(
@@ -312,21 +341,21 @@ impl PiperGrpc for PiperGrpcService {
         let piper_stream =
             self._create_speech_synthesis_stream(&req.voice_id, req.text, output_config)?;
         let (tx, rx) = mpsc::channel(512);
-        SYNTHESIS_THREAD_POOL.spawn_fifo (move || {
+        SYNTHESIS_THREAD_POOL.spawn_fifo(move || {
             for wav_result in piper_stream {
                 let wav = match wav_result {
                     Ok(wav) => wav,
                     Err(e) => {
                         let err = Err(PiperGrpcError::from(e).into());
-                        tx.blocking_send (err).ok();
-                        return
+                        tx.blocking_send(err).ok();
+                        return;
                     }
                 };
                 let synth_result = pgrpc::SynthesisResult {
                     wav_samples: wav.as_wave_bytes(),
                     rtf: wav.real_time_factor().unwrap_or_default(),
                 };
-                if tx.blocking_send (Ok(synth_result)).is_err() {
+                if tx.blocking_send(Ok(synth_result)).is_err() {
                     return;
                 }
             }
@@ -346,16 +375,15 @@ impl PiperGrpc for PiperGrpcService {
             appended_silence_ms: args.appended_silence_ms,
         });
         let voice = self.0.read().unwrap();
-        let synth = Arc::clone(&voice.get(&req.voice_id).unwrap().synth);
+        let synth = Arc::clone(&voice.get(&req.voice_id).unwrap().0);
         let (tx, rx) = mpsc::channel(512);
-        SYNTHESIS_THREAD_POOL.spawn_fifo (move || {
-            let stream_result = synth
-                .synthesize_streamed(req.text, output_config, 75, 5);
+        SYNTHESIS_THREAD_POOL.spawn_fifo(move || {
+            let stream_result = synth.synthesize_streamed(req.text, output_config, 75, 5);
             let realtime_speech_stream = match stream_result {
                 Ok(stream) => stream,
                 Err(e) => {
                     let err = Err(PiperGrpcError::from(e).into());
-                    tx.blocking_send (err).ok();
+                    tx.blocking_send(err).ok();
                     return;
                 }
             };
@@ -364,12 +392,14 @@ impl PiperGrpc for PiperGrpcService {
                     Ok(wav) => wav,
                     Err(e) => {
                         let err = Err(PiperGrpcError::from(e).into());
-                        tx.blocking_send (err).ok();
-                        return
+                        tx.blocking_send(err).ok();
+                        return;
                     }
                 };
-                let synth_result = pgrpc::WaveSamples { wav_samples: wav.as_wave_bytes() };
-                let send_error = tx.blocking_send (Ok(synth_result)).is_err();
+                let synth_result = pgrpc::WaveSamples {
+                    wav_samples: wav.as_wave_bytes(),
+                };
+                let send_error = tx.blocking_send(Ok(synth_result)).is_err();
                 if send_error {
                     return;
                 }

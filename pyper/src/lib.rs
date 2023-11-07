@@ -1,12 +1,10 @@
-#![feature(trait_upcasting)]
-
 use once_cell::sync::OnceCell;
-use piper_core::{PiperError, PiperWaveInfo, PiperWaveSamples, RawWaveSamples};
+use piper_core::{PiperError, PiperModel, PiperWaveInfo, PiperWaveSamples, RawWaveSamples};
 use piper_synth::{
     AudioOutputConfig, PiperSpeechStreamBatched, PiperSpeechStreamLazy, PiperSpeechStreamParallel,
     PiperSpeechSynthesizer, SYNTHESIS_THREAD_POOL,
 };
-use piper_vits::VitsVoice;
+use piper_vits::VitsSynthesisConfig;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
@@ -253,8 +251,30 @@ impl RealtimeSpeechStream {
 }
 
 #[pyclass(weakref, module = "piper")]
+struct VitsScales {
+    #[allow(dead_code)]
+    length_scale: f32,
+    #[allow(dead_code)]
+    noise_scale: f32,
+    #[allow(dead_code)]
+    noise_w: f32,
+}
+
+#[pymethods]
+impl VitsScales {
+    #[new]
+    fn new(length_scale: f32, noise_scale: f32, noise_w: f32) -> PyPiperResult<Self> {
+        Ok(Self {
+            length_scale,
+            noise_scale,
+            noise_w,
+        })
+    }
+}
+
+#[pyclass(weakref, module = "piper")]
 #[pyo3(name = "VitsModel")]
-struct PyVitsModel(Arc<dyn VitsVoice + Send + Sync>);
+struct PyVitsModel(Arc<dyn PiperModel + Send + Sync>);
 
 impl PyVitsModel {
     fn get_ort_environment() -> &'static Arc<ort::Environment> {
@@ -279,43 +299,77 @@ impl PyVitsModel {
         Ok(Self(vits))
     }
     #[getter]
-    fn speakers(&self) -> PyPiperResult<HashMap<i64, String>> {
-        Ok(self.0.speakers()?)
-    }
-    #[getter]
     fn get_speaker(&self) -> PyPiperResult<Option<String>> {
-        Ok(self.0.get_speaker()?)
+        match self
+            .0
+            .get_fallback_synthesis_config()?
+            .downcast_ref::<VitsSynthesisConfig>()
+        {
+            Some(synth_config) => match synth_config.speaker {
+                Some(sid) => Ok(self.0.speaker_id_to_name(&sid)?),
+                None => Ok(None),
+            },
+            None => Ok(None),
+        }
     }
     #[setter]
     fn set_speaker(&self, name: String) -> PyPiperResult<()> {
-        Ok(self.0.set_speaker(name)?)
+        let sid = match self.0.speaker_name_to_id(&name)? {
+            Some(sname) => sname,
+            None => {
+                return Err(PiperError::OperationError(format!(
+                    "A speaker with the given name `{}` was not found",
+                    name
+                ))
+                .into())
+            }
+        };
+        match self
+            .0
+            .get_fallback_synthesis_config()?
+            .downcast::<VitsSynthesisConfig>()
+        {
+            Ok(mut synth_config) => {
+                synth_config.speaker = Some(sid);
+                Ok(self.0.set_fallback_synthesis_config(&synth_config)?)
+            }
+            Err(_) => {
+                Err(PiperError::OperationError("Cannot set synthesis config".to_string()).into())
+            }
+        }
     }
-    #[getter]
-    fn get_noise_scale(&self) -> PyPiperResult<f32> {
-        Ok(self.0.get_noise_scale()?)
+    fn get_scales(&self) -> PyPiperResult<VitsScales> {
+        match self
+            .0
+            .get_fallback_synthesis_config()?
+            .downcast::<VitsSynthesisConfig>()
+        {
+            Ok(synth_config) => Ok(VitsScales {
+                length_scale: synth_config.length_scale,
+                noise_scale: synth_config.noise_scale,
+                noise_w: synth_config.noise_w,
+            }),
+            Err(_) => {
+                Err(PiperError::OperationError("Cannot set synthesis config".to_string()).into())
+            }
+        }
     }
-    #[setter]
-    fn set_noise_scale(&self, value: f32) -> PyPiperResult<()> {
-        Ok(self.0.set_noise_scale(value)?)
-    }
-    #[getter]
-    fn get_length_scale(&self) -> PyPiperResult<f32> {
-        Ok(self.0.get_length_scale()?)
-    }
-    #[setter]
-    fn set_length_scale(&self, value: f32) -> PyPiperResult<()> {
-        Ok(self.0.set_length_scale(value)?)
-    }
-    #[getter]
-    fn get_noise_w(&self) -> PyPiperResult<f32> {
-        Ok(self.0.get_noise_w()?)
-    }
-    #[setter]
-    fn set_noise_w(&self, value: f32) -> PyPiperResult<()> {
-        Ok(self.0.set_noise_w(value)?)
-    }
-    fn get_wave_output_info(&self) -> PyPiperResult<PyWaveInfo> {
-        Ok(self.0.wave_info()?.into())
+    fn set_scales(&self, length_scale: f32, noise_scale: f32, noise_w: f32) -> PyPiperResult<()> {
+        match self
+            .0
+            .get_fallback_synthesis_config()?
+            .downcast::<VitsSynthesisConfig>()
+        {
+            Ok(mut synth_config) => {
+                synth_config.length_scale = length_scale;
+                synth_config.noise_scale = noise_scale;
+                synth_config.noise_w = noise_w;
+                Ok(self.0.set_fallback_synthesis_config(&synth_config)?)
+            }
+            Err(_) => {
+                Err(PiperError::OperationError("Cannot set synthesis config".to_string()).into())
+            }
+        }
     }
 }
 
@@ -413,6 +467,17 @@ impl Piper {
             .synthesize_to_file(filename, text, audio_output_config.map(|o| o.into()))?;
         Ok(())
     }
+    #[getter]
+    fn language(&self) -> PyPiperResult<Option<String>> {
+        Ok(self.0.get_language()?)
+    }
+    #[getter]
+    fn speakers(&self) -> PyPiperResult<Option<HashMap<i64, String>>> {
+        Ok(self.0.get_speakers()?.cloned())
+    }
+    fn get_wave_output_info(&self) -> PyPiperResult<PyWaveInfo> {
+        Ok(self.0.wave_info()?.into())
+    }
 }
 
 /// A fast, local neural text-to-speech system
@@ -420,6 +485,7 @@ impl Piper {
 fn pyper(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add("PiperException", _py.get_type::<PiperException>())?;
     m.add_class::<PyVitsModel>()?;
+    m.add_class::<VitsScales>()?;
     m.add_class::<PyAudioOutputConfig>()?;
     m.add_class::<WaveSamples>()?;
     m.add_class::<LazySpeechStream>()?;

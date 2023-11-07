@@ -2,11 +2,13 @@ mod utils;
 
 use once_cell::sync::{Lazy, OnceCell};
 use piper_core::{
-    PiperError, PiperModel, PiperResult, PiperWaveResult, PiperWaveSamples, RawWaveSamples,
+    Phonemes, PiperError, PiperModel, PiperResult, PiperWaveInfo, PiperWaveResult,
+    PiperWaveSamples, RawWaveSamples,
 };
 use rayon::prelude::*;
 use rayon::{ThreadPool, ThreadPoolBuilder};
-use std::collections::vec_deque::VecDeque;
+use std::any::Any;
+use std::collections::{vec_deque::VecDeque, HashMap};
 use std::sync::Arc;
 
 const RATE_RANGE: (f32, f32) = (0.0f32, 5.0f32);
@@ -109,7 +111,7 @@ impl PiperSpeechSynthesizer {
         output_config: Option<AudioOutputConfig>,
     ) -> SpeechSynthesisTaskProvider {
         SpeechSynthesisTaskProvider {
-            model: Arc::clone(&self.0),
+            model: self.clone_model(),
             text,
             output_config,
         }
@@ -191,6 +193,54 @@ impl PiperSpeechSynthesizer {
             self.0.wave_info()?.num_channels.try_into().unwrap(),
             self.0.wave_info()?.sample_width.try_into().unwrap(),
         )?)
+    }
+    #[inline(always)]
+    pub fn clone_model(&self) -> Arc<dyn PiperModel + Send + Sync> {
+        Arc::clone(&self.0)
+    }
+}
+
+impl PiperModel for PiperSpeechSynthesizer {
+    fn wave_info(&self) -> PiperResult<PiperWaveInfo> {
+        self.0.wave_info()
+    }
+    fn phonemize_text(&self, text: &str) -> PiperResult<Phonemes> {
+        self.0.phonemize_text(text)
+    }
+    fn speak_batch(&self, phoneme_batches: Vec<String>) -> PiperResult<Vec<PiperWaveSamples>> {
+        self.0.speak_batch(phoneme_batches)
+    }
+    fn speak_one_sentence(&self, phonemes: String) -> PiperWaveResult {
+        self.0.speak_one_sentence(phonemes)
+    }
+    fn get_default_synthesis_config(&self) -> PiperResult<Box<dyn Any>> {
+        self.0.get_default_synthesis_config()
+    }
+    fn get_fallback_synthesis_config(&self) -> PiperResult<Box<dyn Any>> {
+        self.0.get_fallback_synthesis_config()
+    }
+    fn set_fallback_synthesis_config(&self, synthesis_config: &dyn Any) -> PiperResult<()> {
+        self.0.set_fallback_synthesis_config(synthesis_config)
+    }
+    fn get_language(&self) -> PiperResult<Option<String>> {
+        self.0.get_language()
+    }
+    fn get_speakers(&self) -> PiperResult<Option<&HashMap<i64, String>>> {
+        self.0.get_speakers()
+    }
+    fn properties(&self) -> PiperResult<HashMap<String, String>> {
+        self.0.properties()
+    }
+    fn supports_streaming_output(&self) -> bool {
+        self.0.supports_streaming_output()
+    }
+    fn stream_synthesis<'a>(
+        &'a self,
+        #[allow(unused_variables)] phonemes: String,
+        #[allow(unused_variables)] chunk_size: usize,
+        #[allow(unused_variables)] chunk_padding: usize,
+    ) -> PiperResult<Box<dyn Iterator<Item = PiperResult<RawWaveSamples>> + Send + Sync + 'a>> {
+        self.0.stream_synthesis(phonemes, chunk_size, chunk_padding)
     }
 }
 
@@ -364,7 +414,7 @@ impl SpeechSynthesisChannel {
 }
 
 pub struct RealtimeSpeechStream<'a> {
-    stream: Box<dyn Iterator<Item = PiperResult<RawWaveSamples>>  + Send + Sync + 'a>,
+    stream: Box<dyn Iterator<Item = PiperResult<RawWaveSamples>> + Send + Sync + 'a>,
     output_config: Option<AudioOutputConfig>,
     sample_rate: usize,
     num_channels: usize,

@@ -14,7 +14,7 @@ members = [
 ]
 
 [patch.crates-io]
-libtashkeel_base = { path = "./libtashkeel/libtashkeel_base" }
+libtashkeel_base = { path = "./deps/libtashkeel/libtashkeel_base" }
 
 [profile.release]
 opt-level = 3
