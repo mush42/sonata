@@ -24,14 +24,6 @@ const BOS: char = '^';
 const EOS: char = '$';
 const PAD: char = '_';
 
-#[allow(dead_code)]
-static CPU_COUNT: Lazy<i16> = Lazy::new(|| {
-    std::thread::available_parallelism()
-        .map(usize::from)
-        .map(|n| n.try_into().unwrap())
-        .unwrap_or(4)
-});
-
 #[inline(always)]
 fn reversed_mapping<K, V>(input: &HashMap<K, V>) -> HashMap<V, K>
 where

@@ -378,7 +378,7 @@ impl PiperGrpc for PiperGrpcService {
         let synth = Arc::clone(&voice.get(&req.voice_id).unwrap().0);
         let (tx, rx) = mpsc::channel(512);
         SYNTHESIS_THREAD_POOL.spawn_fifo(move || {
-            let stream_result = synth.synthesize_streamed(req.text, output_config, 45, 5);
+            let stream_result = synth.synthesize_streamed(req.text, output_config, 30, 1);
             let realtime_speech_stream = match stream_result {
                 Ok(stream) => stream,
                 Err(e) => {
