@@ -2,7 +2,6 @@ use espeak_phonemizer::text_to_phonemes;
 use libtashkeel_base::do_tashkeel;
 use ndarray::Axis;
 use ndarray::{Array, Array1, Array2, ArrayView, CowArray, Dim, IxDynImpl};
-use ndarray_stats::QuantileExt;
 use ort::{tensor::OrtOwnedTensor, Environment, GraphOptimizationLevel, SessionBuilder, Value};
 use piper_core::{
     Phonemes, PiperError, PiperModel, PiperResult, PiperWaveInfo, PiperWaveResult,
@@ -16,9 +15,6 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-const I16MIN_F32: f32 = i16::MIN as f32;
-const I16MAX_F32: f32 = i16::MAX as f32;
-const MAX_WAV_VALUE: f32 = 32767.0;
 const MIN_CHUNK_SIZE: usize = 100;
 #[allow(dead_code)]
 const FADE_SECS: f64 = 0.002;
@@ -33,31 +29,6 @@ where
     V: ToOwned<Owned = V> + std::hash::Hash + std::cmp::Eq,
 {
     HashMap::from_iter(input.iter().map(|(k, v)| (v.to_owned(), k.to_owned())))
-}
-
-#[inline(always)]
-fn audio_float_to_i16(audio_f32: ArrayView<f32, Dim<IxDynImpl>>) -> PiperResult<RawWaveSamples> {
-    if audio_f32.is_empty() {
-        return Ok(Default::default());
-    }
-    let Ok(min_audio_value) = audio_f32.min() else {
-        return Err(PiperError::OperationError(
-            "Invalid output from model inference.".to_string(),
-        ));
-    };
-    let Ok(max_audio_value) = audio_f32.max() else {
-        return Err(PiperError::OperationError(
-            "Invalid output from model inference. ".to_string(),
-        ));
-    };
-    let abs_max = max_audio_value.max(min_audio_value.abs());
-    let audio_scale = MAX_WAV_VALUE / abs_max.max(f32::EPSILON);
-    let samples = Vec::from_iter(
-        audio_f32
-            .iter()
-            .map(|i| (i * audio_scale).clamp(I16MIN_F32, I16MAX_F32) as i16),
-    );
-    Ok(samples.into())
 }
 
 fn load_model_config(config_path: &Path) -> PiperResult<(ModelConfig, VitsSynthesisConfig)> {
@@ -440,11 +411,10 @@ impl VitsModel {
             }
         };
 
-        let audio_output = outputs.view();
+        let audio = Vec::from(outputs.view().as_slice().unwrap());
 
-        let samples = audio_float_to_i16(audio_output.view())?;
         Ok(PiperWaveSamples::new(
-            samples,
+            audio.into(),
             self.config.audio.sample_rate as usize,
             Some(inference_ms),
         ))
@@ -814,7 +784,7 @@ impl EncoderOutputs {
             }
         };
         match outputs[0].try_extract() {
-            Ok(out) => audio_float_to_i16(out.view().view()),
+            Ok(out) => Ok(Vec::from(out.view().as_slice().unwrap()).into()),
             Err(e) => Err(PiperError::OperationError(format!(
                 "Failed to run model inference. Error: {}",
                 e
@@ -873,7 +843,7 @@ impl SpeechStreamer {
             self.consume();
             (None, None)
         } else {
-            (Some(chunk_end),  Some(-self.chunk_padding))
+            (Some(chunk_end), Some(-self.chunk_padding))
         };
         let index = ndarray::Slice::new(start_index, end_index, 1);
         let session = &self.decoder_model;
@@ -893,21 +863,15 @@ impl SpeechStreamer {
                 inputs.push(Value::from_array(session.allocator(), &g_input).unwrap())
             }
             match session.run(inputs) {
-                Ok(outputs) => {
-                    match outputs[0].try_extract() {
-                        Ok(audio_t) => self.audio_chunk(
-                            audio_t.view().view(),
-                            start_padding,
-                            end_padding
-                        ),
-                        Err(e) => {
-                            Err(PiperError::OperationError(format!(
-                                "Failed to run model inference. Error: {}",
-                                e
-                            )))
-                        }
+                Ok(outputs) => match outputs[0].try_extract() {
+                    Ok(audio_t) => {
+                        self.audio_chunk(audio_t.view().view(), start_padding, end_padding)
                     }
-                }
+                    Err(e) => Err(PiperError::OperationError(format!(
+                        "Failed to run model inference. Error: {}",
+                        e
+                    ))),
+                },
                 Err(e) => Err(PiperError::OperationError(format!(
                     "Failed to run model inference. Error: {}",
                     e
@@ -923,10 +887,13 @@ impl SpeechStreamer {
         end_padding: Option<isize>,
     ) -> PiperResult<RawWaveSamples> {
         let audio_idx = ndarray::Slice::new(start_padding, end_padding, 1);
-        let audio = audio_float_to_i16(
-            audio_view.slice_axis(Axis(2), audio_idx).into_dyn()
-        )?;
-        Ok(audio)
+        let audio = Vec::from(
+            audio_view
+                .slice_axis(Axis(2), audio_idx)
+                .as_slice()
+                .unwrap(),
+        );
+        Ok(audio.into())
     }
     fn consume(&mut self) {
         self.chunk_enumerater.find(|_| false);

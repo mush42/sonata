@@ -38,19 +38,18 @@ pub struct AudioOutputConfig {
 
 impl AudioOutputConfig {
     fn apply(&self, mut audio: PiperWaveSamples) -> PiperWaveResult {
-        let samples = std::mem::take(&mut audio.samples);
-        let mut samples =
-            self.apply_to_raw_samples(samples, audio.info.sample_rate, audio.info.num_channels)?;
-        let raw_buf = audio.samples.as_mut_vec();
-        raw_buf.append(samples.as_mut_vec());
+        let mut samples = audio.samples.take();
         if let Some(time_ms) = self.appended_silence_ms {
             let mut silence_samples = self.generate_silence(
                 time_ms as usize,
                 audio.info.sample_rate,
                 audio.info.num_channels
-            )?.to_vec();
-            raw_buf.append(silence_samples.as_mut());
+            )?;
+            samples.append(silence_samples.take().as_mut());
         }
+        let mut samples =
+            self.apply_to_raw_samples(samples.into(), audio.info.sample_rate, audio.info.num_channels)?;
+        audio.samples.as_mut_vec().append(samples.as_mut_vec());
         Ok(audio)
     }
     fn apply_to_raw_samples(
@@ -59,12 +58,12 @@ impl AudioOutputConfig {
         sample_rate: usize,
         num_channels: usize,
     ) -> PiperResult<RawWaveSamples> {
-        let samples = samples.to_vec();
+        let samples = samples.into_vec();
         let input_len = samples.len();
         if input_len == 0 {
             return Ok(samples.into());
         }
-        let mut out_buf: Vec<i16> = Vec::new();
+        let mut out_buf: Vec<f32> = Vec::new();
         unsafe {
             let stream = sonic_sys::sonicCreateStream(sample_rate as i32, num_channels as i32);
             if let Some(rate) = self.rate {
@@ -85,7 +84,7 @@ impl AudioOutputConfig {
                     utils::percent_to_param(pitch, PITCH_RANGE.0, PITCH_RANGE.1),
                 );
             }
-            sonic_sys::sonicWriteShortToStream(stream, samples.as_ptr(), input_len as i32);
+            sonic_sys::sonicWriteFloatToStream(stream, samples.as_ptr(), input_len as i32);
             sonic_sys::sonicFlushStream(stream);
             let num_samples = sonic_sys::sonicSamplesAvailable(stream);
             if num_samples <= 0 {
@@ -94,7 +93,7 @@ impl AudioOutputConfig {
                 );
             }
             out_buf.reserve_exact(num_samples as usize);
-            sonic_sys::sonicReadShortFromStream(
+            sonic_sys::sonicReadFloatFromStream(
                 stream,
                 out_buf.spare_capacity_mut().as_mut_ptr().cast(),
                 num_samples,
@@ -112,7 +111,7 @@ impl AudioOutputConfig {
         num_channels: usize
     ) -> PiperResult<RawWaveSamples> {
         let num_samples = (time_ms * sample_rate) / 1000;
-        let silence_samples = vec![0i16; num_samples];
+        let silence_samples = vec![0f32; num_samples];
         self.apply_to_raw_samples(
             silence_samples.into(),
             sample_rate,
@@ -195,11 +194,11 @@ impl PiperSpeechSynthesizer {
         text: String,
         output_config: Option<AudioOutputConfig>,
     ) -> PiperResult<()> {
-        let mut samples: Vec<i16> = Vec::new();
+        let mut samples: Vec<f32> = Vec::new();
         for result in self.synthesize_parallel(text, output_config)? {
             match result {
                 Ok(ws) => {
-                    samples.append(&mut ws.to_vec());
+                    samples.append(&mut ws.into_vec());
                 }
                 Err(e) => return Err(e),
             };
@@ -209,9 +208,10 @@ impl PiperSpeechSynthesizer {
                 "No speech data to write".to_string(),
             ));
         }
+        let audio = RawWaveSamples::from(samples);
         Ok(wave_writer::write_wave_samples_to_file(
             filename.into(),
-            samples.iter(),
+            audio.to_i16_vec().iter(),
             self.0.wave_info()?.sample_rate as u32,
             self.0.wave_info()?.num_channels.try_into().unwrap(),
             self.0.wave_info()?.sample_width.try_into().unwrap(),

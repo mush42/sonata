@@ -3,6 +3,10 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
+const I16MIN_F32: f32 = i16::MIN as f32;
+const I16MAX_F32: f32 = i16::MAX as f32;
+const MAX_WAV_VALUE: f32 = 32767.0;
+
 pub type PiperResult<T> = Result<T, PiperError>;
 pub type PiperWaveResult = PiperResult<PiperWaveSamples>;
 
@@ -72,50 +76,66 @@ pub struct PiperWaveInfo {
 
 #[derive(Clone, Debug, Default)]
 #[must_use]
-pub struct RawWaveSamples(Vec<i16>);
+pub struct RawWaveSamples(Vec<f32>);
 
 impl RawWaveSamples {
-    pub fn new(samples: Vec<i16>) -> Self {
+    pub fn new(samples: Vec<f32>) -> Self {
         Self(samples)
     }
-    pub fn as_vec(&self) -> &Vec<i16> {
+    pub fn as_slice(&self) -> &[f32] {
+        self.0.as_slice()
+    }
+    pub fn as_vec(&self) -> &Vec<f32> {
         &self.0
     }
-    pub fn as_mut_vec(&mut self) -> &mut Vec<i16> {
+    pub fn as_mut_vec(&mut self) -> &mut Vec<f32> {
         &mut self.0
     }
-
-    pub fn to_vec(self) -> Vec<i16> {
+    pub fn into_vec(self) -> Vec<f32> {
         self.0
     }
-
-    pub fn as_wave_bytes(&self) -> Vec<u8> {
-        self.0.iter().flat_map(|i| i.to_le_bytes()).collect()
+    pub fn take(&mut self) -> Vec<f32> {
+        std::mem::take(self.0.as_mut())
     }
-
     pub fn len(&self) -> usize {
         self.0.len()
     }
-
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-}
-
-impl From<RawWaveSamples> for Vec<i16> {
-    fn from(other: RawWaveSamples) -> Self {
-        other.to_vec()
+    pub fn to_i16_vec(&self) -> Vec<i16> {
+        if self.is_empty() {
+            return Default::default();
+        }
+        let min_audio_value = self.0.iter().copied().reduce(|x, y| x.min(y)).unwrap();
+        let max_audio_value = self.0.iter().copied().reduce(|x, y| x.max(y)).unwrap();
+        let abs_max = max_audio_value.max(min_audio_value.abs());
+        let audio_scale = MAX_WAV_VALUE / abs_max.max(f32::EPSILON);
+        Vec::from_iter(
+            self.0
+                .iter()
+                .map(|i| (i * audio_scale).clamp(I16MIN_F32, I16MAX_F32) as i16),
+        )
+    }
+    pub fn as_wave_bytes(&self) -> Vec<u8> {
+        Vec::from_iter(self.to_i16_vec().iter().flat_map(|i| i.to_le_bytes()))
     }
 }
 
-impl From<Vec<i16>> for RawWaveSamples {
-    fn from(other: Vec<i16>) -> Self {
+impl From<RawWaveSamples> for Vec<f32> {
+    fn from(other: RawWaveSamples) -> Self {
+        other.into_vec()
+    }
+}
+
+impl From<Vec<f32>> for RawWaveSamples {
+    fn from(other: Vec<f32>) -> Self {
         Self::new(other)
     }
 }
 
 impl IntoIterator for RawWaveSamples {
-    type Item = i16;
+    type Item = f32;
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -144,8 +164,8 @@ impl PiperWaveSamples {
         }
     }
 
-    pub fn to_vec(self) -> Vec<i16> {
-        self.samples.to_vec()
+    pub fn into_vec(self) -> Vec<f32> {
+        self.samples.into_vec()
     }
 
     pub fn as_wave_bytes(&self) -> Vec<u8> {
@@ -180,7 +200,7 @@ impl PiperWaveSamples {
     pub fn save_to_file(&self, filename: &str) -> PiperResult<()> {
         Ok(wave_writer::write_wave_samples_to_file(
             filename.into(),
-            self.samples.as_vec().iter(),
+            self.samples.to_i16_vec().iter(),
             self.info.sample_rate as u32,
             self.info.num_channels as u32,
             self.info.sample_width as u32,
@@ -189,7 +209,7 @@ impl PiperWaveSamples {
 }
 
 impl IntoIterator for PiperWaveSamples {
-    type Item = i16;
+    type Item = f32;
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
