@@ -1,0 +1,6 @@
+[submodule "deps/sonic"]
+	path = deps/sonic
+	url = https://github.com/waywardgeek/sonic
+[submodule "deps/libtashkeel"]
+	path = deps/libtashkeel
+	url = https://github.com/mush42/libtashkeel
