@@ -2,7 +2,7 @@ use once_cell::sync::OnceCell;
 use pgrpc::piper_grpc_server::{PiperGrpc, PiperGrpcServer};
 use piper_core::{PiperError, PiperModel, PiperResult};
 use piper_synth::{
-    AudioOutputConfig, PiperSpeechStreamLazy, PiperSpeechSynthesizer, SYNTHESIS_THREAD_POOL,
+    AudioOutputConfig, PiperSpeechStreamLazy, PiperSpeechSynthesizer
 };
 use piper_vits::VitsSynthesisConfig;
 use std::collections::HashMap;
@@ -201,7 +201,7 @@ impl PiperGrpcService {
         };
         let speaker = match synth_config.speaker {
             Some(ref sid) => model.speaker_id_to_name(sid)?,
-            None => model.speaker_id_to_name(&0)?
+            None => model.speaker_id_to_name(&0)?,
         };
         Ok(pgrpc::SynthesisOptions {
             speaker,
@@ -239,11 +239,17 @@ impl PiperGrpcService {
             }
         };
         let model = voice.model_ref();
-        let mut synth_config = match model.get_fallback_synthesis_config()?.downcast::<VitsSynthesisConfig>() {
+        let mut synth_config = match model
+            .get_fallback_synthesis_config()?
+            .downcast::<VitsSynthesisConfig>()
+        {
             Ok(synth_config) => synth_config,
-            Err(_) => return Err(PiperError::OperationError(
-                "Could not set synthesis parameters ".to_string()
-            ).into())
+            Err(_) => {
+                return Err(PiperError::OperationError(
+                    "Could not set synthesis parameters ".to_string(),
+                )
+                .into())
+            }
         };
         if let Some(sname) = synth_opts.speaker {
             if let Some(sid) = model.speaker_name_to_id(&sname)? {
@@ -341,7 +347,7 @@ impl PiperGrpc for PiperGrpcService {
         let piper_stream =
             self._create_speech_synthesis_stream(&req.voice_id, req.text, output_config)?;
         let (tx, rx) = mpsc::channel(512);
-        SYNTHESIS_THREAD_POOL.spawn_fifo(move || {
+        tokio::task::spawn_blocking(move || {
             for wav_result in piper_stream {
                 let wav = match wav_result {
                     Ok(wav) => wav,
@@ -374,11 +380,21 @@ impl PiperGrpc for PiperGrpcService {
             pitch: args.pitch.map(|i| i as u8),
             appended_silence_ms: args.appended_silence_ms,
         });
-        let voice = self.0.read().unwrap();
-        let synth = Arc::clone(&voice.get(&req.voice_id).unwrap().0);
+        let voice_id = &req.voice_id;
+        let voices = self.0.read().unwrap();
+        let voice = match voices.get(voice_id) {
+            Some(voice) => voice,
+            None => {
+                return Err(PiperGrpcError::VoiceNotFound(format!(
+                    "A voice with the key `{}` has not been loaded",
+                    voice_id
+                )).into())
+            }
+        };
+        let synth = Arc::clone(&voice.0);
         let (tx, rx) = mpsc::channel(512);
-        SYNTHESIS_THREAD_POOL.spawn_fifo(move || {
-            let stream_result = synth.synthesize_streamed(req.text, output_config, 30, 1);
+        tokio::task::spawn_blocking(move || {
+            let stream_result = synth.synthesize_streamed(req.text, output_config, 100, 2);
             let realtime_speech_stream = match stream_result {
                 Ok(stream) => stream,
                 Err(e) => {
@@ -399,8 +415,7 @@ impl PiperGrpc for PiperGrpcService {
                 let synth_result = pgrpc::WaveSamples {
                     wav_samples: wav.as_wave_bytes(),
                 };
-                let send_error = tx.blocking_send(Ok(synth_result)).is_err();
-                if send_error {
+                if tx.blocking_send(Ok(synth_result)).is_err() {
                     return;
                 }
             }

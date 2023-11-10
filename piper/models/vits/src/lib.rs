@@ -1,10 +1,8 @@
 use espeak_phonemizer::text_to_phonemes;
-use fundsp::wave::Wave32;
 use libtashkeel_base::do_tashkeel;
-use ndarray::s;
+use ndarray::Axis;
 use ndarray::{Array, Array1, Array2, ArrayView, CowArray, Dim, IxDynImpl};
 use ndarray_stats::QuantileExt;
-use once_cell::sync::{Lazy, OnceCell};
 use ort::{tensor::OrtOwnedTensor, Environment, GraphOptimizationLevel, SessionBuilder, Value};
 use piper_core::{
     Phonemes, PiperError, PiperModel, PiperResult, PiperWaveInfo, PiperWaveResult,
@@ -15,11 +13,15 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs::File;
-use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+const I16MIN_F32: f32 = i16::MIN as f32;
+const I16MAX_F32: f32 = i16::MAX as f32;
 const MAX_WAV_VALUE: f32 = 32767.0;
+const MIN_CHUNK_SIZE: usize = 100;
+#[allow(dead_code)]
+const FADE_SECS: f64 = 0.002;
 const BOS: char = '^';
 const EOS: char = '$';
 const PAD: char = '_';
@@ -49,11 +51,11 @@ fn audio_float_to_i16(audio_f32: ArrayView<f32, Dim<IxDynImpl>>) -> PiperResult<
         ));
     };
     let abs_max = max_audio_value.max(min_audio_value.abs());
-    let audio_scale = MAX_WAV_VALUE / abs_max.max(0.01f32);
+    let audio_scale = MAX_WAV_VALUE / abs_max.max(f32::EPSILON);
     let samples = Vec::from_iter(
         audio_f32
             .iter()
-            .map(|i| (i * audio_scale).clamp(i16::MIN as f32, i16::MAX as f32) as i16),
+            .map(|i| (i * audio_scale).clamp(I16MIN_F32, I16MAX_F32) as i16),
     );
     Ok(samples.into())
 }
@@ -625,7 +627,7 @@ impl VitsStreamingModel {
         };
 
         let session = &self.encoder_model;
-        let ort_values: Vec<Value> = {
+        {
             let mut inputs = vec![
                 Value::from_array(session.allocator(), &phoneme_inputs).unwrap(),
                 Value::from_array(session.allocator(), &input_lengths).unwrap(),
@@ -635,16 +637,13 @@ impl VitsStreamingModel {
                 inputs.push(Value::from_array(session.allocator(), sid_tensor).unwrap());
             }
             match session.run(inputs) {
-                Ok(out) => out,
-                Err(e) => {
-                    return Err(PiperError::OperationError(format!(
-                        "Failed to run model inference. Error: {}",
-                        e
-                    )))
-                }
+                Ok(ort_values) => EncoderOutputs::from_values(ort_values),
+                Err(e) => Err(PiperError::OperationError(format!(
+                    "Failed to run model inference. Error: {}",
+                    e
+                ))),
             }
-        };
-        EncoderOutputs::new(ManuallyDrop::new(ort_values))
+        }
     }
 }
 
@@ -735,6 +734,7 @@ impl PiperModel for VitsStreamingModel {
         let streamer = Box::new(SpeechStreamer::new(
             Arc::clone(&self.decoder_model),
             encoder_outputs,
+            self.config.audio.sample_rate as usize,
             chunk_size,
             chunk_padding,
         ));
@@ -742,32 +742,38 @@ impl PiperModel for VitsStreamingModel {
     }
 }
 
-struct EncoderOutputs<'a> {
-    values: OnceCell<ManuallyDrop<Vec<Value<'static>>>>,
-    z: OrtOwnedTensor<'a, f32, Dim<IxDynImpl>>,
-    y_mask: OrtOwnedTensor<'a, f32, Dim<IxDynImpl>>,
+struct EncoderOutputs {
+    z: Array<f32, Dim<IxDynImpl>>,
+    y_mask: Array<f32, Dim<IxDynImpl>>,
     g: Array<f32, Dim<IxDynImpl>>,
 }
 
-impl<'a> EncoderOutputs<'a> {
-    fn new(values: ManuallyDrop<Vec<Value<'static>>>) -> PiperResult<Self> {
-        let z: OrtOwnedTensor<f32, _> = match values[0].try_extract() {
-            Ok(out) => out,
-            Err(e) => {
-                return Err(PiperError::OperationError(format!(
-                    "Failed to run model inference. Error: {}",
-                    e
-                )))
-            }
+impl EncoderOutputs {
+    #[inline(always)]
+    fn from_values(values: Vec<Value>) -> PiperResult<Self> {
+        let z = {
+            let z_t: OrtOwnedTensor<f32, _> = match values[0].try_extract() {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(PiperError::OperationError(format!(
+                        "Failed to run model inference. Error: {}",
+                        e
+                    )))
+                }
+            };
+            z_t.view().clone().into_owned()
         };
-        let y_mask: OrtOwnedTensor<f32, _> = match values[1].try_extract() {
-            Ok(out) => out,
-            Err(e) => {
-                return Err(PiperError::OperationError(format!(
-                    "Failed to run model inference. Error: {}",
-                    e
-                )))
-            }
+        let y_mask = {
+            let y_mask_t: OrtOwnedTensor<f32, _> = match values[1].try_extract() {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(PiperError::OperationError(format!(
+                        "Failed to run model inference. Error: {}",
+                        e
+                    )))
+                }
+            };
+            y_mask_t.view().clone().into_owned()
         };
         let g = if values.len() == 3 {
             let g_t: OrtOwnedTensor<f32, _> = match values[2].try_extract() {
@@ -783,19 +789,12 @@ impl<'a> EncoderOutputs<'a> {
         } else {
             Array1::<f32>::from_iter([]).into_dyn()
         };
-        Ok(Self {
-            values: OnceCell::with_value(values),
-            z,
-            y_mask,
-            g,
-        })
+        Ok(Self { z, y_mask, g })
     }
     fn infer_decoder(&self, session: &ort::Session) -> PiperResult<RawWaveSamples> {
         let outputs: Vec<Value> = {
-            let z_view = self.z.view();
-            let y_mask_view = self.y_mask.view();
-            let z_input = CowArray::from(z_view.view());
-            let y_mask_input = CowArray::from(y_mask_view.view());
+            let z_input = CowArray::from(self.z.view());
+            let y_mask_input = CowArray::from(self.y_mask.view());
             let g_input = CowArray::from(self.g.view());
             let mut inputs = vec![
                 Value::from_array(session.allocator(), &z_input).unwrap(),
@@ -824,71 +823,65 @@ impl<'a> EncoderOutputs<'a> {
     }
 }
 
-impl<'a> Drop for EncoderOutputs<'a> {
-    fn drop(&mut self) {
-        if let Some(values) = self.values.take() {
-            ManuallyDrop::into_inner(values);
-        }
-    }
-}
-
-struct SpeechStreamer<'a> {
+struct SpeechStreamer {
     decoder_model: Arc<ort::Session>,
-    encoder_outputs: EncoderOutputs<'a>,
+    encoder_outputs: EncoderOutputs,
+    #[allow(dead_code)]
+    sample_rate: f64,
     chunk_size: isize,
     chunk_padding: isize,
+    num_frames: isize,
     chunk_enumerater: std::vec::IntoIter<usize>,
-    num_frames: usize,
-    num_chunks: usize,
     one_shot: bool,
 }
 
-impl<'a> SpeechStreamer<'a> {
+impl SpeechStreamer {
     fn new(
         decoder_model: Arc<ort::Session>,
-        encoder_outputs: EncoderOutputs<'a>,
+        encoder_outputs: EncoderOutputs,
+        sample_rate: usize,
         chunk_size: usize,
         chunk_padding: usize,
     ) -> Self {
-        let num_frames = encoder_outputs.z.view().shape()[2];
+        let chunk_size = chunk_size.max(MIN_CHUNK_SIZE);
+        let chunk_padding = chunk_padding.min(chunk_size / 2).min(1);
+        let num_frames = encoder_outputs.z.shape()[2];
         let num_chunks = (num_frames as f32 / chunk_size as f32).ceil() as usize;
         let one_shot = num_frames <= (chunk_size + (chunk_padding * 3));
         Self {
             decoder_model,
             encoder_outputs,
+            sample_rate: sample_rate as f64,
             chunk_size: chunk_size as isize,
             chunk_padding: chunk_padding as isize,
+            num_frames: num_frames as isize,
             chunk_enumerater: Vec::from_iter(0..num_chunks).into_iter(),
-            num_frames,
-            num_chunks,
             one_shot,
         }
     }
-    fn synthesize_chunk(&self, chunk_idx: usize) -> PiperResult<RawWaveSamples> {
+    fn synthesize_chunk(&mut self, chunk_idx: isize) -> PiperResult<RawWaveSamples> {
         let (start_index, start_padding) = if chunk_idx == 0 {
             (0, 0)
         } else {
-            let start = (chunk_idx as isize * self.chunk_size) - self.chunk_padding;
-            (start as usize, self.chunk_padding)
+            let start = (chunk_idx * self.chunk_size) - self.chunk_padding;
+            (start, self.chunk_padding)
         };
-        let mut end_index =
-            ((chunk_idx + 1) * self.chunk_size as usize) + self.chunk_padding as usize;
-        let end_padding: Option<isize>;
-        if end_index > self.num_frames {
-            end_index = self.num_frames;
-            end_padding = None;
+        let chunk_end = ((chunk_idx + 1) * self.chunk_size) + self.chunk_padding;
+        let (end_index, end_padding) = if chunk_end > self.num_frames {
+            (None, None)
+        } else if (self.num_frames - chunk_end) <= MIN_CHUNK_SIZE as isize {
+            self.consume();
+            (None, None)
         } else {
-            end_padding = Some(-self.chunk_padding);
-        }
-        let index = s![.., .., start_index..end_index];
+            (Some(chunk_end),  Some(-self.chunk_padding))
+        };
+        let index = ndarray::Slice::new(start_index, end_index, 1);
         let session = &self.decoder_model;
-        let outputs: Vec<Value> = {
-            let z_t = self.encoder_outputs.z.view();
-            let y_mask_t = self.encoder_outputs.y_mask.view();
-            let z_view = z_t.view();
-            let y_mask_view = y_mask_t.view();
-            let z_chunk = z_view.slice(index).into_dyn();
-            let y_mask_chunk = y_mask_view.slice(index).into_dyn();
+        {
+            let z_view = self.encoder_outputs.z.view();
+            let y_mask_view = self.encoder_outputs.y_mask.view();
+            let z_chunk = z_view.slice_axis(Axis(2), index).into_dyn();
+            let y_mask_chunk = y_mask_view.slice_axis(Axis(2), index).into_dyn();
             let z_input = CowArray::from(z_chunk);
             let y_mask_input = CowArray::from(y_mask_chunk);
             let g_input = CowArray::from(self.encoder_outputs.g.view());
@@ -900,58 +893,59 @@ impl<'a> SpeechStreamer<'a> {
                 inputs.push(Value::from_array(session.allocator(), &g_input).unwrap())
             }
             match session.run(inputs) {
-                Ok(out) => out,
-                Err(e) => {
-                    return Err(PiperError::OperationError(format!(
-                        "Failed to run model inference. Error: {}",
-                        e
-                    )))
+                Ok(outputs) => {
+                    match outputs[0].try_extract() {
+                        Ok(audio_t) => self.audio_chunk(
+                            audio_t.view().view(),
+                            start_padding,
+                            end_padding
+                        ),
+                        Err(e) => {
+                            Err(PiperError::OperationError(format!(
+                                "Failed to run model inference. Error: {}",
+                                e
+                            )))
+                        }
+                    }
                 }
+                Err(e) => Err(PiperError::OperationError(format!(
+                    "Failed to run model inference. Error: {}",
+                    e
+                ))),
             }
-        };
-        match outputs[0].try_extract() {
-            Ok(out) => {
-                let audio_view = out.view();
-                let audio_idx =
-                    ndarray::Slice::new(start_padding * 256, end_padding.map(|v| v * 256), 1);
-                let audio_f32 = audio_view.slice_axis(ndarray::Axis(2), audio_idx);
-                let mut wave = Wave32::from_samples(22050.0, audio_f32.as_slice().unwrap());
-                let fade_ms = 0.002;
-                if fade_ms <= wave.duration() {
-                    wave.fade(fade_ms);
-                    wave.normalize();
-                }
-                let audio_view = ArrayView::from_shape(wave.len(), wave.channel(0))
-                    .unwrap()
-                    .into_dyn();
-                let audio = audio_float_to_i16(audio_view)?;
-                Ok(audio)
-            }
-            Err(e) => Err(PiperError::OperationError(format!(
-                "Failed to run model inference. Error: {}",
-                e
-            ))),
         }
+    }
+    #[inline(always)]
+    fn audio_chunk(
+        &self,
+        audio_view: ArrayView<f32, Dim<IxDynImpl>>,
+        start_padding: isize,
+        end_padding: Option<isize>,
+    ) -> PiperResult<RawWaveSamples> {
+        let audio_idx = ndarray::Slice::new(start_padding, end_padding, 1);
+        let audio = audio_float_to_i16(
+            audio_view.slice_axis(Axis(2), audio_idx).into_dyn()
+        )?;
+        Ok(audio)
+    }
+    fn consume(&mut self) {
+        self.chunk_enumerater.find(|_| false);
     }
 }
 
-impl<'a> Iterator for SpeechStreamer<'a> {
+impl Iterator for SpeechStreamer {
     type Item = PiperResult<RawWaveSamples>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let chunk_idx = self.chunk_enumerater.next()?;
         if self.one_shot {
-            // Consume the iterator
-            self.chunk_enumerater.nth(self.num_chunks + 1);
+            self.consume();
             Some(
                 self.encoder_outputs
                     .infer_decoder(self.decoder_model.as_ref()),
             )
         } else {
-            Some(self.synthesize_chunk(chunk_idx))
+            Some(self.synthesize_chunk(chunk_idx as isize))
         }
     }
 }
-
-unsafe impl Send for SpeechStreamer<'_> {}
-unsafe impl Sync for SpeechStreamer<'_> {}
