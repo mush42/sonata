@@ -44,8 +44,11 @@ impl AudioOutputConfig {
         let raw_buf = audio.samples.as_mut_vec();
         raw_buf.append(samples.as_mut_vec());
         if let Some(time_ms) = self.appended_silence_ms {
-            let mut silence_samples =
-                Self::generate_silence(time_ms as usize, audio.info.sample_rate);
+            let mut silence_samples = self.generate_silence(
+                time_ms as usize,
+                audio.info.sample_rate,
+                audio.info.num_channels
+            )?.to_vec();
             raw_buf.append(silence_samples.as_mut());
         }
         Ok(audio)
@@ -102,9 +105,19 @@ impl AudioOutputConfig {
         Ok(out_buf.into())
     }
     #[inline(always)]
-    fn generate_silence(time_ms: usize, sample_rate: usize) -> Vec<i16> {
+    fn generate_silence(
+        &self,
+        time_ms: usize,
+        sample_rate: usize,
+        num_channels: usize
+    ) -> PiperResult<RawWaveSamples> {
         let num_samples = (time_ms * sample_rate) / 1000;
-        vec![0i16; num_samples]
+        let silence_samples = vec![0i16; num_samples];
+        self.apply_to_raw_samples(
+            silence_samples.into(),
+            sample_rate,
+            num_channels,
+        )
     }
 }
 
@@ -471,9 +484,11 @@ impl<'a> Iterator for RealtimeSpeechStream<'a> {
                 self.finished = true;
                 self.output_config.as_ref().and_then(|output_config| {
                     output_config.appended_silence_ms.map(|time_ms| {
-                        let silence_samples =
-                            AudioOutputConfig::generate_silence(time_ms as usize, self.sample_rate);
-                        Ok(silence_samples.into())
+                        output_config.generate_silence(
+                            time_ms as usize,
+                            self.sample_rate,
+                            self.num_channels,
+                        )
                     })
                 })
             }
