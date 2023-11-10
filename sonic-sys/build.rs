@@ -1,12 +1,10 @@
-extern crate bindgen;
-extern crate cc;
-
 use std::env;
 use std::path::PathBuf;
 
 fn main() {
     println!("cargo:rustc-link-lib=static=libsonic");
     println!("cargo:rerun-if-changed=../deps/sonic/sonic.h");
+    println!("cargo:rerun-if-changed=../deps/sonic/sonic.c");
 
     cc::Build::new()
         .file("../deps/sonic/sonic.c")
