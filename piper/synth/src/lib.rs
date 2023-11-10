@@ -40,11 +40,17 @@ impl AudioOutputConfig {
     fn apply(&self, mut audio: PiperWaveSamples) -> PiperWaveResult {
         let samples = std::mem::take(&mut audio.samples);
         let mut samples =
-            self.apply_on_raw_samples(samples, audio.info.sample_rate, audio.info.num_channels)?;
-        audio.samples.as_mut_vec().append(samples.as_mut_vec());
+            self.apply_to_raw_samples(samples, audio.info.sample_rate, audio.info.num_channels)?;
+        let raw_buf = audio.samples.as_mut_vec();
+        raw_buf.append(samples.as_mut_vec());
+        if let Some(time_ms) = self.appended_silence_ms {
+            let mut silence_samples =
+                Self::generate_silence(time_ms as usize, audio.info.sample_rate);
+            raw_buf.append(silence_samples.as_mut());
+        }
         Ok(audio)
     }
-    fn apply_on_raw_samples(
+    fn apply_to_raw_samples(
         &self,
         samples: RawWaveSamples,
         sample_rate: usize,
@@ -93,11 +99,12 @@ impl AudioOutputConfig {
             sonic_sys::sonicDestroyStream(stream);
             out_buf.set_len(num_samples as usize);
         }
-        if let Some(time_ms) = self.appended_silence_ms {
-            let num_samples = (time_ms * sample_rate as u32) / 1000u32;
-            out_buf.append(&mut vec![0i16; num_samples as usize]);
-        };
         Ok(out_buf.into())
+    }
+    #[inline(always)]
+    fn generate_silence(time_ms: usize, sample_rate: usize) -> Vec<i16> {
+        let num_samples = (time_ms * sample_rate) / 1000;
+        vec![0i16; num_samples]
     }
 }
 
@@ -161,12 +168,12 @@ impl PiperSpeechSynthesizer {
             .0
             .stream_synthesis(phonemes.to_string(), chunk_size, chunk_padding)?;
         let wavinfo = self.0.wave_info()?;
-        Ok(RealtimeSpeechStream {
+        Ok(RealtimeSpeechStream::new(
             stream,
             output_config,
-            sample_rate: wavinfo.sample_rate,
-            num_channels: wavinfo.num_channels,
-        })
+            wavinfo.sample_rate,
+            wavinfo.num_channels,
+        ))
     }
 
     pub fn synthesize_to_file(
@@ -421,15 +428,30 @@ pub struct RealtimeSpeechStream<'a> {
     output_config: Option<AudioOutputConfig>,
     sample_rate: usize,
     num_channels: usize,
+    finished: bool,
 }
 
 impl<'a> RealtimeSpeechStream<'a> {
+    fn new(
+        stream: Box<dyn Iterator<Item = PiperResult<RawWaveSamples>> + Send + Sync + 'a>,
+        output_config: Option<AudioOutputConfig>,
+        sample_rate: usize,
+        num_channels: usize,
+    ) -> Self {
+        Self {
+            stream,
+            output_config,
+            sample_rate,
+            num_channels,
+            finished: false,
+        }
+    }
     fn apply_audio_output_config(
         &self,
         wav_result: PiperResult<RawWaveSamples>,
     ) -> PiperResult<RawWaveSamples> {
         if let Some(ref output_config) = self.output_config {
-            output_config.apply_on_raw_samples(wav_result?, self.sample_rate, self.num_channels)
+            output_config.apply_to_raw_samples(wav_result?, self.sample_rate, self.num_channels)
         } else {
             wav_result
         }
@@ -440,9 +462,22 @@ impl<'a> Iterator for RealtimeSpeechStream<'a> {
     type Item = PiperResult<RawWaveSamples>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.stream
-            .next()
-            .map(|res| self.apply_audio_output_config(res))
+        if self.finished {
+            return None;
+        }
+        match self.stream.next() {
+            Some(raw_samples) => Some(self.apply_audio_output_config(raw_samples)),
+            None => {
+                self.finished = true;
+                self.output_config.as_ref().and_then(|output_config| {
+                    output_config.appended_silence_ms.map(|time_ms| {
+                        let silence_samples =
+                            AudioOutputConfig::generate_silence(time_ms as usize, self.sample_rate);
+                        Ok(silence_samples.into())
+                    })
+                })
+            }
+        }
     }
 }
 
