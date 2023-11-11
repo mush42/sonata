@@ -887,13 +887,15 @@ impl SpeechStreamer {
         end_padding: Option<isize>,
     ) -> PiperResult<RawWaveSamples> {
         let audio_idx = ndarray::Slice::new(start_padding, end_padding, 1);
-        let audio = Vec::from(
+        let mut audio: RawWaveSamples = Vec::from(
             audio_view
                 .slice_axis(Axis(2), audio_idx)
                 .as_slice()
                 .unwrap(),
-        );
-        Ok(audio.into())
+        )
+        .into();
+        audio.crossfade_chunk(72);
+        Ok(audio)
     }
     fn consume(&mut self) {
         self.chunk_enumerater.find(|_| false);

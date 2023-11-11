@@ -118,7 +118,32 @@ impl RawWaveSamples {
         )
     }
     pub fn as_wave_bytes(&self) -> Vec<u8> {
-        Vec::from_iter(self.to_i16_vec().iter().flat_map(|i| i.to_le_bytes()))
+        Vec::from_iter(self.to_i16_vec().into_iter().flat_map(|i| i.to_le_bytes()))
+    }
+    pub fn crossfade_chunk(&mut self, num_samples: usize)  {
+        const PI: f32 = std::f32::consts::PI;
+        let length = self.len();
+        let num_samples = num_samples.min(length / 2);
+        let attenuation_factor = num_samples as f32;
+        let fade = (0..num_samples)
+            .map(|i| i as f32 / attenuation_factor)
+            // quarter of sine-wave
+            .map(|f| (f * PI / 2.0).sin());
+        let samples: &mut Vec<f32> = self.0.as_mut();
+        for (i, f) in (0..num_samples).zip(fade) {
+            samples[i] *= f;
+            samples[length - i - 1] *= f;
+        }
+    }
+    pub fn to_db(&self) -> Vec<f32> {
+        Vec::from_iter(
+        self
+        .0
+        .iter()
+        .map(|x| {
+            20.0 * x.abs().log10()
+        })
+        )
     }
 }
 
