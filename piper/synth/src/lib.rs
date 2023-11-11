@@ -43,12 +43,15 @@ impl AudioOutputConfig {
             let mut silence_samples = self.generate_silence(
                 time_ms as usize,
                 audio.info.sample_rate,
-                audio.info.num_channels
+                audio.info.num_channels,
             )?;
             samples.append(silence_samples.take().as_mut());
         }
-        let mut samples =
-            self.apply_to_raw_samples(samples.into(), audio.info.sample_rate, audio.info.num_channels)?;
+        let mut samples = self.apply_to_raw_samples(
+            samples.into(),
+            audio.info.sample_rate,
+            audio.info.num_channels,
+        )?;
         audio.samples.as_mut_vec().append(samples.as_mut_vec());
         Ok(audio)
     }
@@ -108,15 +111,11 @@ impl AudioOutputConfig {
         &self,
         time_ms: usize,
         sample_rate: usize,
-        num_channels: usize
+        num_channels: usize,
     ) -> PiperResult<RawWaveSamples> {
         let num_samples = (time_ms * sample_rate) / 1000;
         let silence_samples = vec![0f32; num_samples];
-        self.apply_to_raw_samples(
-            silence_samples.into(),
-            sample_rate,
-            num_channels,
-        )
+        self.apply_to_raw_samples(silence_samples.into(), sample_rate, num_channels)
     }
 }
 

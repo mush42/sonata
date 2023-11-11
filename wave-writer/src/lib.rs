@@ -30,9 +30,11 @@ where
         num_channels as u16,
         sample_rate,
         (sample_width * 8) as u16,
-        buf
+        buf,
     ) else {
-        return Err(WaveWriterError("Failed to initialize wave writer".to_string()));
+        return Err(WaveWriterError(
+            "Failed to initialize wave writer".to_string(),
+        ));
     };
     let any_fail = samples
         .map(|i| wave_writer.write_sample_i16(*i))

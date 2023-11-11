@@ -107,8 +107,16 @@ impl RawWaveSamples {
         if self.is_empty() {
             return Default::default();
         }
-        let min_audio_value = self.0.iter().copied().reduce(|x, y| x.min(y)).unwrap();
-        let max_audio_value = self.0.iter().copied().reduce(|x, y| x.max(y)).unwrap();
+        let min_audio_value = self
+            .0
+            .iter()
+            .min_by(|x, y| x.partial_cmp(&y).unwrap())
+            .unwrap();
+        let max_audio_value = self
+            .0
+            .iter()
+            .max_by(|x, y| x.partial_cmp(&y).unwrap())
+            .unwrap();
         let abs_max = max_audio_value.max(min_audio_value.abs());
         let audio_scale = MAX_WAV_VALUE / abs_max.max(f32::EPSILON);
         Vec::from_iter(
@@ -120,11 +128,11 @@ impl RawWaveSamples {
     pub fn as_wave_bytes(&self) -> Vec<u8> {
         Vec::from_iter(self.to_i16_vec().into_iter().flat_map(|i| i.to_le_bytes()))
     }
-    pub fn crossfade_chunk(&mut self, num_samples: usize)  {
+    pub fn crossfade(&mut self, num_samples: usize) {
         const PI: f32 = std::f32::consts::PI;
         let length = self.len();
         let num_samples = num_samples.min(length / 2);
-        let attenuation_factor = num_samples as f32;
+        let attenuation_factor = (num_samples - 1) as f32;
         let fade = (0..num_samples)
             .map(|i| i as f32 / attenuation_factor)
             // quarter of sine-wave
@@ -135,15 +143,30 @@ impl RawWaveSamples {
             samples[length - i - 1] *= f;
         }
     }
-    pub fn to_db(&self) -> Vec<f32> {
-        Vec::from_iter(
-        self
-        .0
-        .iter()
-        .map(|x| {
-            20.0 * x.abs().log10()
-        })
-        )
+    pub fn low_pass_filter(&mut self, num_samples: usize, fc: f32) {
+        let length = self.len();
+        let num_samples = num_samples.min(length);
+        let samples: &mut Vec<f32> = self.0.as_mut();
+        for i in 0..num_samples {
+            let x = samples[i];
+            let y = samples[length - i - 1];
+            samples[i] = if x < fc { x } else { 0.0 };
+            samples[length - i - 1] = if y < fc { y } else { 0.0 };
+        }
+    }
+    pub fn high_pass_filter(&mut self, num_samples: usize, fc: f32) {
+        let length = self.len();
+        let num_samples = num_samples.min(length);
+        let samples: &mut Vec<f32> = self.0.as_mut();
+        for i in 0..num_samples {
+            let x = samples[i];
+            let y = samples[length - i - 1];
+            samples[i] = if x > fc { x } else { 0.0 };
+            samples[length - i - 1] = if y > fc { y } else { 0.0 };
+        }
+    }
+    pub fn to_decibel(&self) -> Vec<f32> {
+        Vec::from_iter(self.0.iter().map(|x| 20.0 * x.abs().log10()))
     }
 }
 

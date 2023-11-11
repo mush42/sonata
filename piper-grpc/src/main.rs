@@ -1,9 +1,7 @@
 use once_cell::sync::OnceCell;
 use pgrpc::piper_grpc_server::{PiperGrpc, PiperGrpcServer};
 use piper_core::{PiperError, PiperModel, PiperResult};
-use piper_synth::{
-    AudioOutputConfig, PiperSpeechStreamLazy, PiperSpeechSynthesizer
-};
+use piper_synth::{AudioOutputConfig, PiperSpeechStreamLazy, PiperSpeechSynthesizer};
 use piper_vits::VitsSynthesisConfig;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -388,7 +386,8 @@ impl PiperGrpc for PiperGrpcService {
                 return Err(PiperGrpcError::VoiceNotFound(format!(
                     "A voice with the key `{}` has not been loaded",
                     voice_id
-                )).into())
+                ))
+                .into())
             }
         };
         let synth = Arc::clone(&voice.0);

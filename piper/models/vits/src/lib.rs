@@ -894,7 +894,7 @@ impl SpeechStreamer {
                 .unwrap(),
         )
         .into();
-        audio.crossfade_chunk(72);
+        audio.crossfade(72);
         Ok(audio)
     }
     fn consume(&mut self) {

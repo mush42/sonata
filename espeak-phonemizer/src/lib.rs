@@ -72,12 +72,15 @@ pub fn text_to_phonemes(
     let mut phonemes = Vec::new();
     for line in text.lines() {
         phonemes.append(&mut _text_to_phonemes(
-            line, language, phoneme_separator, remove_lang_switch_flags, remove_stress
+            line,
+            language,
+            phoneme_separator,
+            remove_lang_switch_flags,
+            remove_stress,
         )?)
     }
     Ok(phonemes)
 }
-
 
 pub fn _text_to_phonemes(
     text: &str,

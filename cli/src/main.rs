@@ -12,9 +12,7 @@ struct Cli {
     /// Model config
     #[arg(short, long, value_name = "CONFIG_FILE")]
     config: PathBuf,
-
 }
-
 
 fn main() {
     enable_logging();
