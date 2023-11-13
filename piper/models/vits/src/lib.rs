@@ -803,6 +803,7 @@ struct SpeechStreamer {
     num_frames: isize,
     chunk_enumerater: std::vec::IntoIter<usize>,
     one_shot: bool,
+    last_chunk_suffix: RawWaveSamples,
 }
 
 impl SpeechStreamer {
@@ -827,6 +828,7 @@ impl SpeechStreamer {
             num_frames: num_frames as isize,
             chunk_enumerater: Vec::from_iter(0..num_chunks).into_iter(),
             one_shot,
+            last_chunk_suffix: Default::default(),
         }
     }
     fn synthesize_chunk(&mut self, chunk_idx: isize) -> PiperResult<RawWaveSamples> {
@@ -881,21 +883,31 @@ impl SpeechStreamer {
     }
     #[inline(always)]
     fn audio_chunk(
-        &self,
+        &mut self,
         audio_view: ArrayView<f32, Dim<IxDynImpl>>,
         start_padding: isize,
         end_padding: Option<isize>,
     ) -> PiperResult<RawWaveSamples> {
         let audio_idx = ndarray::Slice::new(start_padding, end_padding, 1);
-        let mut audio: RawWaveSamples = Vec::from(
+        let mut audio_data = Vec::from(
             audio_view
                 .slice_axis(Axis(2), audio_idx)
                 .as_slice()
                 .unwrap(),
-        )
-        .into();
-        audio.crossfade(72);
-        Ok(audio)
+        );
+        const N_SFX_SAMPLES: usize = 44;
+        const CUTOFF_FREQ: f32 = 0.5;
+        let this_chunk_suffix = if audio_data.len() >= N_SFX_SAMPLES {
+            let idx = audio_data.len() - N_SFX_SAMPLES..audio_data.len();
+            Vec::from_iter(audio_data.drain(idx))
+        } else {
+            Default::default()
+        };
+        let mut last_chunk_suffix =
+            std::mem::replace(&mut self.last_chunk_suffix, this_chunk_suffix.into());
+        last_chunk_suffix.overlap_with(audio_data.into());
+        last_chunk_suffix.low_pass_filter(last_chunk_suffix.len(), CUTOFF_FREQ);
+        Ok(last_chunk_suffix)
     }
     fn consume(&mut self) {
         self.chunk_enumerater.find(|_| false);

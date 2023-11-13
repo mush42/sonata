@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
+const PI: f32 = std::f32::consts::PI;
 const I16MIN_F32: f32 = i16::MIN as f32;
 const I16MAX_F32: f32 = i16::MAX as f32;
 const MAX_WAV_VALUE: f32 = 32767.0;
@@ -110,12 +111,12 @@ impl RawWaveSamples {
         let min_audio_value = self
             .0
             .iter()
-            .min_by(|x, y| x.partial_cmp(&y).unwrap())
+            .min_by(|x, y| x.partial_cmp(y).unwrap())
             .unwrap();
         let max_audio_value = self
             .0
             .iter()
-            .max_by(|x, y| x.partial_cmp(&y).unwrap())
+            .max_by(|x, y| x.partial_cmp(y).unwrap())
             .unwrap();
         let abs_max = max_audio_value.max(min_audio_value.abs());
         let audio_scale = MAX_WAV_VALUE / abs_max.max(f32::EPSILON);
@@ -128,8 +129,20 @@ impl RawWaveSamples {
     pub fn as_wave_bytes(&self) -> Vec<u8> {
         Vec::from_iter(self.to_i16_vec().into_iter().flat_map(|i| i.to_le_bytes()))
     }
+    pub fn overlap_with(&mut self, mut other: Self) {
+        if !self.is_empty() {
+            let num_samples = self.len();
+            let r: &mut [f32] = self.0.as_mut();
+            let u: &mut [f32] = other.0.as_mut();
+            for t in 0..num_samples {
+                let ratio = (t as f32 * PI / (2.0 * num_samples as f32)).sin();
+                r[t] *= 1.0f32 - ratio;
+                u[t] *= ratio;
+            }
+        }
+        self.0.append(other.0.as_mut());
+    }
     pub fn crossfade(&mut self, num_samples: usize) {
-        const PI: f32 = std::f32::consts::PI;
         let length = self.len();
         let num_samples = num_samples.min(length / 2);
         let attenuation_factor = (num_samples - 1) as f32;
