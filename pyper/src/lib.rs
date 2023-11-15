@@ -102,7 +102,7 @@ impl WaveSamples {
         PyBytes::new(py, &bytes_vec).into()
     }
     fn save_to_file(&self, filename: &str) -> PyPiperResult<()> {
-        Ok(self.0.save_to_file(filename)?)
+        Ok(self.0.save_to_file(filename).map_err(|e| PiperError::from(e))?)
     }
     #[getter]
     fn sample_rate(&self) -> usize {

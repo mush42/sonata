@@ -10,7 +10,7 @@ members = [
     "pyper",
     "espeak-phonemizer",
     "sonic-sys",
-    "wave-writer"
+    "audio-ops"
 ]
 
 [patch.crates-io]

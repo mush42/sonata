@@ -208,7 +208,7 @@ impl PiperSpeechSynthesizer {
             ));
         }
         let audio = RawWaveSamples::from(samples);
-        Ok(wave_writer::write_wave_samples_to_file(
+        Ok(audio_ops::write_wave_samples_to_file(
             filename.into(),
             audio.to_i16_vec().iter(),
             self.0.wave_info()?.sample_rate as u32,

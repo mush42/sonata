@@ -867,7 +867,7 @@ impl SpeechStreamer {
             match session.run(inputs) {
                 Ok(outputs) => match outputs[0].try_extract() {
                     Ok(audio_t) => {
-                        self.audio_chunk(audio_t.view().view(), start_padding, end_padding)
+                        self.process_chunk_audio(audio_t.view().view(), start_padding, end_padding)
                     }
                     Err(e) => Err(PiperError::OperationError(format!(
                         "Failed to run model inference. Error: {}",
@@ -882,7 +882,7 @@ impl SpeechStreamer {
         }
     }
     #[inline(always)]
-    fn audio_chunk(
+    fn process_chunk_audio(
         &mut self,
         audio_view: ArrayView<f32, Dim<IxDynImpl>>,
         start_padding: isize,
@@ -896,18 +896,17 @@ impl SpeechStreamer {
                 .unwrap(),
         );
         const N_SFX_SAMPLES: usize = 44;
-        const CUTOFF_FREQ: f32 = 0.5;
         let this_chunk_suffix = if audio_data.len() >= N_SFX_SAMPLES {
             let idx = audio_data.len() - N_SFX_SAMPLES..audio_data.len();
             Vec::from_iter(audio_data.drain(idx))
         } else {
             Default::default()
         };
-        let mut last_chunk_suffix =
+        let mut audio =
             std::mem::replace(&mut self.last_chunk_suffix, this_chunk_suffix.into());
-        last_chunk_suffix.overlap_with(audio_data.into());
-        last_chunk_suffix.low_pass_filter(last_chunk_suffix.len(), CUTOFF_FREQ);
-        Ok(last_chunk_suffix)
+        audio.normalize(1e-3);
+        audio.overlap_with(audio_data.into());
+        Ok(audio)
     }
     fn consume(&mut self) {
         self.chunk_enumerater.find(|_| false);
