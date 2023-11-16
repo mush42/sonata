@@ -89,16 +89,16 @@ impl RawAudioSamples {
             s1.reverse();
             let num_samples = s1.len().min(s2.len());
             let attenuation_factor = 2.0 * num_samples as f32;
-            let data_iter = (0..num_samples)
+            (0..num_samples)
                 .map(|t| (t as f32 * PI / attenuation_factor).sin())
                 .zip(
                     s1.into_iter()
                     .zip(s2.into_iter())
-                );
-            for (r, (f1, f2)) in data_iter {
-                *f1 *= r;
-                *f2 *= r;
-            }
+                )
+                .for_each(|(r, (f1, f2))| {
+                    *f1 *= r;
+                    *f2 *= r;
+                });
             s1.reverse();
         }
         self.0.append(other.0.as_mut());
