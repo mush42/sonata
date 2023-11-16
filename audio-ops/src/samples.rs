@@ -83,16 +83,23 @@ impl RawAudioSamples {
         let factor = self_max.max(max_value) / max_value.abs();
         self.0.iter_mut().for_each(|f| *f /= factor);
     }
-    pub fn overlap_with(&mut self, mut other: Self) {
+    pub fn overlap_with(&mut self, other: &mut Self) {
         if !self.is_empty() {
-            let num_samples = self.len();
-            let r: &mut [f32] = self.0.as_mut();
-            let u: &mut [f32] = other.0.as_mut();
-            for t in 0..num_samples {
-                let ratio = (t as f32 * PI / (2.0 * num_samples as f32)).sin();
-                r[num_samples - t - 1] *= ratio;
-                u[t] *= ratio;
+            let (s1, s2) = (self.0.as_mut_slice(), other.0.as_mut_slice());
+            s1.reverse();
+            let num_samples = s1.len().min(s2.len());
+            let attenuation_factor = 2.0 * num_samples as f32;
+            let data_iter = (0..num_samples)
+                .map(|t| (t as f32 * PI / attenuation_factor).sin())
+                .zip(
+                    s1.into_iter()
+                    .zip(s2.into_iter())
+                );
+            for (r, (f1, f2)) in data_iter {
+                *f1 *= r;
+                *f2 *= r;
             }
+            s1.reverse();
         }
         self.0.append(other.0.as_mut());
     }
@@ -283,8 +290,8 @@ mod tests {
     fn test_overlap() {
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
         let mut s1 = RawAudioSamples::from(data.clone());
-        let s2 = RawAudioSamples::from(data.clone());
-        s1.overlap_with(s2);
+        let mut s2 = RawAudioSamples::from(data.clone());
+        s1.overlap_with(&mut s2);
         assert_eq!(s1.len(), data.len() * 2);
         let rs = s1.as_vec();
         assert_eq!(rs[7], 0.0);
