@@ -895,7 +895,7 @@ impl SpeechStreamer {
                 .as_slice()
                 .unwrap(),
         );
-        const N_SFX_SAMPLES: usize = 44;
+        const N_SFX_SAMPLES: usize = 10;
         let this_chunk_suffix = if audio_data.len() >= N_SFX_SAMPLES {
             let idx = audio_data.len() - N_SFX_SAMPLES..audio_data.len();
             Vec::from_iter(audio_data.drain(idx))
@@ -904,7 +904,6 @@ impl SpeechStreamer {
         };
         let mut audio =
             std::mem::replace(&mut self.last_chunk_suffix, this_chunk_suffix.into());
-        audio.normalize(1e-3);
         audio.overlap_with(&mut RawWaveSamples::from(audio_data));
         Ok(audio)
     }
