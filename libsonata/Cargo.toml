@@ -3,6 +3,31 @@ name = "libsonata"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "libsonata"
+crate-type = ["cdylib"]
+
+[features]
+default = ["piper"]
+piper = ["dep:sonata-piper", "dep:ort"]
 
 [dependencies]
+sonata-core = { version = "0.2.0", path = "../sonata/core" }
+sonata-synth = { version = "0.2.0", path = "../sonata/synth" }
+ffi-support = "0.4.4"
+libc = "0.2.150"
+once_cell = "1.18.0"
+
+[dependencies.sonata-piper]
+version = "0.2.0"
+path = "../sonata/models/piper"
+optional = true
+
+[dependencies.ort]
+version = "1.16.3"
+default-features = false
+features = ["load-dynamic",]
+optional = true
+
+[build-dependencies]
+cbindgen = "0.26.0"

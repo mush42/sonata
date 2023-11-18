@@ -91,10 +91,7 @@ impl AudioSamples {
             let attenuation_factor = 2.0 * num_samples as f32;
             (0..num_samples)
                 .map(|t| (t as f32 * PI / attenuation_factor).sin())
-                .zip(
-                    s1.into_iter()
-                    .zip(s2.into_iter())
-                )
+                .zip(s1.iter_mut().zip(s2.iter_mut()))
                 .for_each(|(r, (f1, f2))| {
                     *f1 *= r;
                     *f2 *= r;

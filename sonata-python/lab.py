@@ -10,7 +10,7 @@ piper = PiperModel(
     r"C:\Users\ibnom\AppData\Roaming\nvda\piper\voices\v1.0\en_US-hfc_male_streaming-medium\en_US-hfc_male-medium.onnx.json",
 )
 
-p = Sonata.with_piper(vits)
+p = Sonata.with_piper(piper)
 
 
 text = "Who are you? said the Caterpillar. Replied Alice , rather shyly, I hardly know, sir!"
