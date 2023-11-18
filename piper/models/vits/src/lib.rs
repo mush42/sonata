@@ -895,7 +895,7 @@ impl SpeechStreamer {
                 .as_slice()
                 .unwrap(),
         );
-        const N_SFX_SAMPLES: usize = 10;
+        const N_SFX_SAMPLES: usize = 16;
         let this_chunk_suffix = if audio_data.len() >= N_SFX_SAMPLES {
             let idx = audio_data.len() - N_SFX_SAMPLES..audio_data.len();
             Vec::from_iter(audio_data.drain(idx))
