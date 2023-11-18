@@ -12,9 +12,9 @@ pub struct AudioInfo {
 
 #[derive(Clone, Debug, Default)]
 #[must_use]
-pub struct RawAudioSamples(Vec<f32>);
+pub struct AudioSamples(Vec<f32>);
 
-impl RawAudioSamples {
+impl AudioSamples {
     pub fn new(samples: Vec<f32>) -> Self {
         Self(samples)
     }
@@ -171,19 +171,19 @@ impl RawAudioSamples {
     }
 }
 
-impl From<RawAudioSamples> for Vec<f32> {
-    fn from(other: RawAudioSamples) -> Self {
+impl From<AudioSamples> for Vec<f32> {
+    fn from(other: AudioSamples) -> Self {
         other.into_vec()
     }
 }
 
-impl From<Vec<f32>> for RawAudioSamples {
+impl From<Vec<f32>> for AudioSamples {
     fn from(other: Vec<f32>) -> Self {
         Self::new(other)
     }
 }
 
-impl IntoIterator for RawAudioSamples {
+impl IntoIterator for AudioSamples {
     type Item = f32;
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
@@ -194,14 +194,14 @@ impl IntoIterator for RawAudioSamples {
 
 #[derive(Debug, Clone)]
 #[must_use]
-pub struct SynthesisAudioSamples {
-    pub samples: RawAudioSamples,
+pub struct Audio {
+    pub samples: AudioSamples,
     pub info: AudioInfo,
     pub inference_ms: Option<f32>,
 }
 
-impl SynthesisAudioSamples {
-    pub fn new(samples: RawAudioSamples, sample_rate: usize, inference_ms: Option<f32>) -> Self {
+impl Audio {
+    pub fn new(samples: AudioSamples, sample_rate: usize, inference_ms: Option<f32>) -> Self {
         Self {
             samples,
             inference_ms,
@@ -257,7 +257,7 @@ impl SynthesisAudioSamples {
     }
 }
 
-impl IntoIterator for SynthesisAudioSamples {
+impl IntoIterator for Audio {
     type Item = f32;
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn test_fade_in() {
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-        let mut s1 = RawAudioSamples::from(data.clone());
+        let mut s1 = AudioSamples::from(data.clone());
         s1.fade_in(4);
         assert_eq!(s1.0[0], 0.0);
     }
@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn test_fade_out() {
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-        let mut s1 = RawAudioSamples::from(data.clone());
+        let mut s1 = AudioSamples::from(data.clone());
         s1.fade_out(4);
         assert_eq!(s1.0[7], 0.0);
     }
@@ -289,8 +289,8 @@ mod tests {
     #[test]
     fn test_overlap() {
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
-        let mut s1 = RawAudioSamples::from(data.clone());
-        let mut s2 = RawAudioSamples::from(data.clone());
+        let mut s1 = AudioSamples::from(data.clone());
+        let mut s2 = AudioSamples::from(data.clone());
         s1.overlap_with(&mut s2);
         assert_eq!(s1.len(), data.len() * 2);
         let rs = s1.as_vec();
@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn test_lowpass_filter() {
         let data = vec![0.0, 0.1, 2.2, 0.0, 0.5, 0.0, 0.7, 0.0];
-        let mut s1 = RawAudioSamples::from(data.clone());
+        let mut s1 = AudioSamples::from(data.clone());
         s1.lowpass_filter(0..5, 0.5);
         assert_eq!(s1.into_iter().filter(|f| *f == 0.0).count(), 6);
     }
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn test_highpass_filter() {
         let data = vec![0.0, 0.1, 2.2, 0.0, 0.5, 0.0, 0.7, 0.0];
-        let mut s1 = RawAudioSamples::from(data.clone());
+        let mut s1 = AudioSamples::from(data.clone());
         s1.highpass_filter(0..s1.len(), 0.5);
         assert_eq!(s1.into_iter().filter(|f| *f != 0.0).count(), 2);
     }
@@ -317,7 +317,7 @@ mod tests {
     #[test]
     fn test_normalize() {
         let data = vec![0.0, 0.1, 2.2, 0.0, 0.5, 0.0, 0.7, 0.0];
-        let mut s1 = RawAudioSamples::from(data.clone());
+        let mut s1 = AudioSamples::from(data.clone());
         s1.normalize(1.0);
         assert_eq!(
             s1.0.into_iter()
@@ -330,7 +330,7 @@ mod tests {
     #[test]
     fn test_strip_silence() {
         let data = vec![0.0, 0.1, 2.2, 0.0, 0.5, 0.0, 0.7, 0.0];
-        let mut s1 = RawAudioSamples::from(data.clone());
+        let mut s1 = AudioSamples::from(data.clone());
         s1.strip_silence(0..s1.len());
         assert_eq!(s1.len(), 4);
     }

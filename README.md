@@ -1,13 +1,19 @@
-# Piper-rs
+# Sonata
 
-A Rust frontend for [piper](https://github.com/rhasspy/piper).
+A cross-platform Rust engine for neural TTS models.
+
+
+## Supported models
+
+* [Piper](https://github.com/rhasspy/piper).
+
 
 # Packages
 
 - `espeak-phonemizer`: Converts text to `IPA` phonemes using a patched version of eSpeak-ng
-- `piper-model`: Handles Piper model loading and inference using `onnxruntime` via `ort`
-- `piper-synth`: Adds additional functionality on top of `piper-model` such as controlling rate, volume, and pitch
-- `pyper`: Python bindings to `piper-synth` using `pyo3`
+- `sonata-model`: Handles model loading and inference using `onnxruntime` via `ort`
+- `sonata-synth`: Adds additional functionality on top of `sonata-model` such as controlling rate, volume, and pitch
+- `pysonata`: Python bindings to `sonata-synth` using `pyo3`
 - `sonic-sys`: Rust FFI bindings to [Sonic](https://github.com/waywardgeek/sonic): a `C` library for controlling various aspects of generated speech, such as rate, volume, and pitch
 
 # A note on testing

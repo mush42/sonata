@@ -2,12 +2,13 @@
 resolver = "2"
 
 members = [
-    "piper/core",
-    "piper/synth",
-    "piper/models/vits",
-    "piper-grpc",
+    "sonata/core",
+    "sonata/synth",
+    "sonata/models/piper",
+    "sonata-grpc",
+    "sonata-python",
+    "libsonata",
     "cli",
-    "pyper",
     "espeak-phonemizer",
     "sonic-sys",
     "audio-ops"

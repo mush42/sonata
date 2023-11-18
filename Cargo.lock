@@ -754,6 +754,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "libsonata"
+version = "0.1.0"
+
+[[package]]
 name = "libtashkeel_base"
 version = "1.2.0"
 dependencies = [
@@ -1058,58 +1062,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "piper-core"
-version = "0.2.0"
-dependencies = [
- "audio-ops",
- "once_cell",
-]
-
-[[package]]
-name = "piper-grpc"
-version = "0.2.0"
-dependencies = [
- "async-stream",
- "env_logger",
- "log",
- "once_cell",
- "ort",
- "piper-core",
- "piper-synth",
- "piper-vits",
- "prost",
- "tokio",
- "tokio-stream",
- "tonic",
- "tonic-build",
- "xxhash-rust",
-]
-
-[[package]]
-name = "piper-synth"
-version = "0.2.0"
-dependencies = [
- "audio-ops",
- "once_cell",
- "piper-core",
- "rayon",
- "sonic-sys",
-]
-
-[[package]]
-name = "piper-vits"
-version = "0.2.0"
-dependencies = [
- "espeak-phonemizer",
- "libtashkeel_base",
- "ndarray",
- "ort",
- "piper-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "ppv-lite86"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1247,18 +1199,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "pyper"
-version = "0.2.0"
-dependencies = [
- "once_cell",
- "ort",
- "piper-core",
- "piper-synth",
- "piper-vits",
- "pyo3",
 ]
 
 [[package]]
@@ -1501,6 +1441,70 @@ checksum = "7b5fac59a5cb5dd637972e5fca70daf0523c9067fcdc4842f053dae04a18f8e9"
 dependencies = [
  "libc",
  "windows-sys",
+]
+
+[[package]]
+name = "sonata-core"
+version = "0.2.0"
+dependencies = [
+ "audio-ops",
+ "once_cell",
+]
+
+[[package]]
+name = "sonata-grpc"
+version = "0.2.0"
+dependencies = [
+ "async-stream",
+ "env_logger",
+ "log",
+ "once_cell",
+ "ort",
+ "prost",
+ "sonata-core",
+ "sonata-piper",
+ "sonata-synth",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-build",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "sonata-piper"
+version = "0.2.0"
+dependencies = [
+ "espeak-phonemizer",
+ "libtashkeel_base",
+ "ndarray",
+ "ort",
+ "serde",
+ "serde_json",
+ "sonata-core",
+]
+
+[[package]]
+name = "sonata-python"
+version = "0.2.0"
+dependencies = [
+ "once_cell",
+ "ort",
+ "pyo3",
+ "sonata-core",
+ "sonata-piper",
+ "sonata-synth",
+]
+
+[[package]]
+name = "sonata-synth"
+version = "0.2.0"
+dependencies = [
+ "audio-ops",
+ "once_cell",
+ "rayon",
+ "sonata-core",
+ "sonic-sys",
 ]
 
 [[package]]
