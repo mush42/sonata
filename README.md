@@ -5,15 +5,17 @@ A cross-platform Rust engine for neural TTS models.
 
 ## Supported models
 
-* [Piper](https://github.com/rhasspy/piper).
+* [Piper](https://github.com/rhasspy/piper)
 
 
-# Packages
+# Crates
 
 - `espeak-phonemizer`: Converts text to `IPA` phonemes using a patched version of eSpeak-ng
 - `sonata-model`: Handles model loading and inference using `onnxruntime` via `ort`
-- `sonata-synth`: Adds additional functionality on top of `sonata-model` such as controlling rate, volume, and pitch
-- `pysonata`: Python bindings to `sonata-synth` using `pyo3`
+- `sonata-synth`: Wraps `SonataModel` and adds synthesized speech post-processing, including changing prosody. Also provides different modes of parallelism.
+- `sonata-grpc`: [GRPC](https://grpc.io/) frontend for sonata
+- `libsonata`: C-API binding to sonata
+- `sonata-python`: Python bindings to `sonata-synth` using `pyo3`
 - `sonic-sys`: Rust FFI bindings to [Sonic](https://github.com/waywardgeek/sonic): a `C` library for controlling various aspects of generated speech, such as rate, volume, and pitch
 
 # A note on testing
