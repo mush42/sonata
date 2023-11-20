@@ -1,18 +1,16 @@
 mod utils;
 pub use sonata_core::*;
 
-use once_cell::sync::{Lazy, OnceCell};
+use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::any::Any;
-use std::collections::{vec_deque::VecDeque, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 const RATE_RANGE: (f32, f32) = (0.0f32, 5.0f32);
 const VOLUME_RANGE: (f32, f32) = (0.1f32, 1.9f32);
 const PITCH_RANGE: (f32, f32) = (0.5f32, 1.5f32);
-/// Batch size when using batched synthesis mode
-const SPEECH_STREAM_BATCH_SIZE: usize = 4;
 
 pub static SYNTHESIS_THREAD_POOL: Lazy<ThreadPool> = Lazy::new(|| {
     let num_cpus = std::thread::available_parallelism()
@@ -148,21 +146,6 @@ impl SonataSpeechSynthesizer {
         output_config: Option<AudioOutputConfig>,
     ) -> SonataResult<SonataSpeechStreamParallel> {
         SonataSpeechStreamParallel::new(self.create_synthesis_task_provider(text, output_config))
-    }
-    pub fn synthesize_batched(
-        &self,
-        text: String,
-        output_config: Option<AudioOutputConfig>,
-        batch_size: Option<usize>,
-    ) -> SonataResult<SonataSpeechStreamBatched> {
-        let mut batch_size = batch_size.unwrap_or(SPEECH_STREAM_BATCH_SIZE);
-        if batch_size == 0 {
-            batch_size = SPEECH_STREAM_BATCH_SIZE;
-        }
-        SonataSpeechStreamBatched::new(
-            self.create_synthesis_task_provider(text, output_config),
-            batch_size,
-        )
     }
     pub fn synthesize_streamed(
         &self,
@@ -346,89 +329,6 @@ impl Iterator for SonataSpeechStreamParallel {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.precalculated_results.next()
-    }
-}
-
-#[must_use]
-pub struct SonataSpeechStreamBatched {
-    provider: Arc<SpeechSynthesisTaskProvider>,
-    sentence_phonemes: std::vec::IntoIter<String>,
-    channel: SpeechSynthesisChannel,
-    batch_size: usize,
-}
-
-impl SonataSpeechStreamBatched {
-    fn new(provider: SpeechSynthesisTaskProvider, batch_size: usize) -> SonataResult<Self> {
-        let sentence_phonemes = provider.get_phonemes()?.into_iter();
-        let mut instance = Self {
-            provider: Arc::new(provider),
-            sentence_phonemes,
-            channel: SpeechSynthesisChannel::new(batch_size)?,
-            batch_size,
-        };
-        instance.send_batch();
-        Ok(instance)
-    }
-    fn send_batch(&mut self) {
-        let next_batch = Vec::from_iter((&mut self.sentence_phonemes).take(self.batch_size));
-        if !next_batch.is_empty() {
-            let provider = Arc::clone(&self.provider);
-            self.channel.put(provider, next_batch);
-        }
-    }
-}
-
-impl Iterator for SonataSpeechStreamBatched {
-    type Item = SonataAudioResult;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.send_batch();
-        self.channel.get()
-    }
-}
-
-struct SpeechSynthesisTask(Arc<OnceCell<SonataAudioResult>>);
-
-impl SpeechSynthesisTask {
-    fn new(provider: Arc<SpeechSynthesisTaskProvider>, phonemes: String) -> Self {
-        let instance = Self(Arc::new(OnceCell::new()));
-        let result = Arc::clone(&instance.0);
-        SYNTHESIS_THREAD_POOL.spawn_fifo(move || {
-            let wave_result = provider.process_one_sentence(phonemes);
-            result.set(wave_result).unwrap();
-        });
-        instance
-    }
-    fn get_result(self) -> SonataAudioResult {
-        self.0.wait();
-        if let Ok(result) = Arc::try_unwrap(self.0) {
-            result.into_inner().unwrap()
-        } else {
-            Err(SonataError::OperationError(
-                "Failed to obtain results".to_string(),
-            ))
-        }
-    }
-}
-
-struct SpeechSynthesisChannel {
-    task_queue: VecDeque<SpeechSynthesisTask>,
-}
-
-impl SpeechSynthesisChannel {
-    fn new(batch_size: usize) -> SonataResult<Self> {
-        Ok(Self {
-            task_queue: VecDeque::with_capacity(batch_size * 4),
-        })
-    }
-    fn put(&mut self, provider: Arc<SpeechSynthesisTaskProvider>, batch: Vec<String>) {
-        for phonemes in batch.into_iter() {
-            self.task_queue
-                .push_back(SpeechSynthesisTask::new(Arc::clone(&provider), phonemes));
-        }
-    }
-    fn get(&mut self) -> Option<SonataAudioResult> {
-        self.task_queue.pop_front().map(|task| task.get_result())
     }
 }
 
