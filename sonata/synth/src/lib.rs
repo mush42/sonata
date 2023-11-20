@@ -1,10 +1,7 @@
 mod utils;
+pub use sonata_core::*;
 
 use once_cell::sync::{Lazy, OnceCell};
-use sonata_core::{
-    Phonemes, SonataError, SonataModel, SonataResult,
-    SonataAudioResult, Audio, AudioInfo, AudioSamples,
-};
 use rayon::prelude::*;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::any::Any;

@@ -3,6 +3,9 @@ name = "sonata-synth"
 version = "0.2.0"
 edition = "2021"
 
+[lib]
+name = "sonata_synth"
+
 [dependencies]
 sonata-core = { path = "../core" }
 sonic-sys = { path = "../../sonic-sys" }
@@ -22,5 +25,9 @@ features = ["load-dynamic",]
 
 [[bench]]
 name = "benchmarks"
+path = "src/benchmarks.rs"
 harness = false
 
+[[test]]
+name = "tests"
+path = "src/tests.rs"
