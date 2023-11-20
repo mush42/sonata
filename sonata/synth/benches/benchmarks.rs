@@ -16,7 +16,7 @@ All of human society depends on communications.";
 const CRATE_DIR: &'static str = env!("CARGO_MANIFEST_DIR");
 static ORT_ENVIRONMENT: OnceCell<Arc<ort::Environment>> = OnceCell::new();
 static STD_VOICE: Lazy<Arc<dyn SonataModel + Send + Sync>> = Lazy::new(|| {
-    let config_path = model_directory("std").join("en_US-amy-medium.onnx.json");
+    let config_path = model_directory("std").join("model.onnx.json");
     voice_from_config_path(&config_path, get_ort_environment()).unwrap()
 });
 static RT_VOICE: Lazy<Arc<dyn SonataModel + Send + Sync>> = Lazy::new(|| {
