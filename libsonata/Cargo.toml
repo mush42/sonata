@@ -5,7 +5,7 @@ edition = "2021"
 
 [lib]
 name = "libsonata"
-crate-type = ["cdylib"]
+crate-type = ["staticlib", "cdylib"]
 
 [features]
 default = ["piper"]

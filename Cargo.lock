@@ -1580,9 +1580,12 @@ name = "sonata-synth"
 version = "0.2.0"
 dependencies = [
  "audio-ops",
+ "divan",
  "once_cell",
+ "ort",
  "rayon",
  "sonata-core",
+ "sonata-piper",
  "sonic-sys",
 ]
 

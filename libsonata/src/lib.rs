@@ -2,12 +2,14 @@ use ffi_support::{call_with_result, define_string_destructor, ErrorCode, ExternE
 use once_cell::sync::OnceCell;
 use sonata_core::{AudioSamples, SonataError, SonataModel, SonataResult};
 use sonata_piper::PiperSynthesisConfig;
-use sonata_synth::{AudioOutputConfig, SonataSpeechSynthesizer};
+use sonata_synth::{AudioOutputConfig, SonataSpeechSynthesizer, SYNTHESIS_THREAD_POOL};
 use std::any::Any;
 use std::ops::Deref;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::mpsc::channel;
+
 
 pub type SpeechSynthesisCallback = extern "C" fn(ByteBuffer) -> bool;
 static ORT_ENVIRONMENT: OnceCell<Arc<ort::Environment>> = OnceCell::new();
@@ -23,11 +25,11 @@ pub mod error_codes {
     pub const UNKNOWN_ERROR: i32 = 21;
 }
 
-pub struct SonataVoice(AssertUnwindSafe<SonataSpeechSynthesizer>);
+pub struct SonataVoice(AssertUnwindSafe<Arc<SonataSpeechSynthesizer>>);
 
 impl From<SonataSpeechSynthesizer> for SonataVoice {
     fn from(other: SonataSpeechSynthesizer) -> Self {
-        Self(AssertUnwindSafe(other))
+        Self(AssertUnwindSafe(Arc::new(other)))
     }
 }
 
@@ -74,10 +76,10 @@ pub type SonataFFIResult<T> = Result<T, SonataFFIError>;
 
 #[repr(C)]
 pub enum SynthesisMode {
-    LAZY,
-    PARALLEL,
-    BATCHED,
-    REALTIME,
+    LAZY = 0,
+    PARALLEL = 1,
+    BATCHED = 2,
+    REALTIME = 3,
 }
 
 #[repr(C)]
@@ -247,10 +249,11 @@ fn _load_piper_voice(config_path: String) -> SonataFFIResult<SonataVoice> {
 }
 
 fn _synthesize(
-    synth: &SonataSpeechSynthesizer,
+    voice: &SonataVoice,
     text: String,
     params: SynthesisParams,
 ) -> SonataFFIResult<()> {
+    let synth: &SonataSpeechSynthesizer = &voice;
     let audio_output_config = Some(params.as_synth_output_config());
     match params.mode {
         SynthesisMode::LAZY => {
@@ -272,12 +275,20 @@ fn _synthesize(
             iterate_stream(stream, params.callback)
         }
         SynthesisMode::REALTIME => {
-            let stream = synth.synthesize_streamed(text, audio_output_config, 72, 3)?;
-            iterate_stream(stream, params.callback)
+            let synth: Arc<SonataSpeechSynthesizer> = Arc::clone(&voice.0);
+            let (tx, rx) = channel();
+            SYNTHESIS_THREAD_POOL.spawn(move || {
+                let stream = synth.synthesize_streamed(text, audio_output_config, 72, 3).unwrap();
+                stream.for_each(|result| {
+                    tx.send(result).unwrap();
+                });
+            });
+            iterate_stream(rx.into_iter(), params.callback)
         }
     }
 }
 
+#[inline(always)]
 fn iterate_stream(
     stream: impl Iterator<Item = SonataResult<AudioSamples>>,
     callback: SpeechSynthesisCallback,
