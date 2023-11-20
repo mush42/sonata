@@ -904,7 +904,7 @@ impl SpeechStreamer {
         };
         let mut audio =
             std::mem::replace(&mut self.last_chunk_suffix, this_chunk_suffix.into());
-        audio.overlap_with(&mut AudioSamples::from(audio_data));
+        audio.merge(AudioSamples::from(audio_data));
         Ok(audio)
     }
     fn consume(&mut self) {

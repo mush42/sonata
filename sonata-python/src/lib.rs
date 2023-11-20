@@ -1,7 +1,7 @@
 use once_cell::sync::OnceCell;
 use sonata_core::{SonataError, SonataModel, Audio, AudioInfo, AudioSamples};
 use sonata_synth::{
-    AudioOutputConfig, SonataSpeechStreamBatched, SonataSpeechStreamLazy, SonataSpeechStreamParallel,
+    AudioOutputConfig, SonataSpeechStreamLazy, SonataSpeechStreamParallel,
     SonataSpeechSynthesizer, SYNTHESIS_THREAD_POOL,
 };
 use sonata_piper::PiperSynthesisConfig;
@@ -172,37 +172,6 @@ impl From<SonataSpeechStreamParallel> for ParallelSpeechStream {
 
 #[pymethods]
 impl ParallelSpeechStream {
-    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
-        slf
-    }
-
-    fn __next__(&mut self, py: Python) -> Option<WaveSamples> {
-        let next_item = py.allow_threads(|| self.0.next());
-        let audio_result = match next_item {
-            Some(result) => result,
-            None => return None,
-        };
-        match audio_result {
-            Ok(audio_data) => Some(WaveSamples(audio_data)),
-            Err(e) => {
-                PyErr::from(PySonataError::from(e)).restore(py);
-                None
-            }
-        }
-    }
-}
-
-#[pyclass(weakref, module = "piper")]
-struct BatchedSpeechStream(SonataSpeechStreamBatched);
-
-impl From<SonataSpeechStreamBatched> for BatchedSpeechStream {
-    fn from(other: SonataSpeechStreamBatched) -> Self {
-        Self(other)
-    }
-}
-
-#[pymethods]
-impl BatchedSpeechStream {
     fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }
@@ -414,18 +383,6 @@ impl Sonata {
             .into())
     }
 
-    fn synthesize_batched(
-        &self,
-        text: String,
-        audio_output_config: Option<PyAudioOutputConfig>,
-        batch_size: Option<usize>,
-    ) -> PySonataResult<BatchedSpeechStream> {
-        Ok(self
-            .0
-            .synthesize_batched(text, audio_output_config.map(|o| o.into()), batch_size)?
-            .into())
-    }
-
     fn synthesize_streamed(
         &self,
         text: String,
@@ -491,7 +448,6 @@ fn sonata(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<WaveSamples>()?;
     m.add_class::<LazySpeechStream>()?;
     m.add_class::<ParallelSpeechStream>()?;
-    m.add_class::<BatchedSpeechStream>()?;
     m.add_class::<RealtimeSpeechStream>()?;
     Ok(())
 }

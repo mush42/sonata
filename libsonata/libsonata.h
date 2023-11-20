@@ -17,8 +17,7 @@ constexpr static const int32_t UNKNOWN_ERROR = 21;
 enum class SynthesisMode {
   LAZY = 0,
   PARALLEL = 1,
-  BATCHED = 2,
-  REALTIME = 3,
+  REALTIME = 2,
 };
 
 struct SonataVoice;

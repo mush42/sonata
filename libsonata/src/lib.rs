@@ -78,8 +78,7 @@ pub type SonataFFIResult<T> = Result<T, SonataFFIError>;
 pub enum SynthesisMode {
     LAZY = 0,
     PARALLEL = 1,
-    BATCHED = 2,
-    REALTIME = 3,
+    REALTIME = 2,
 }
 
 #[repr(C)]
@@ -265,12 +264,6 @@ fn _synthesize(
         SynthesisMode::PARALLEL => {
             let stream = synth
                 .synthesize_parallel(text, audio_output_config)?
-                .map(|wr| wr.map(|aud| aud.samples));
-            iterate_stream(stream, params.callback)
-        }
-        SynthesisMode::BATCHED => {
-            let stream = synth
-                .synthesize_batched(text, audio_output_config, None)?
                 .map(|wr| wr.map(|aud| aud.samples));
             iterate_stream(stream, params.callback)
         }
