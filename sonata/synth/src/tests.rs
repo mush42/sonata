@@ -2,11 +2,11 @@ mod dev_utils;
 
 use sonata_synth::SonataResult;
 
-
 #[test]
 fn test_lazy_stream() -> SonataResult<()> {
     let (synth, text, output_config) = dev_utils::gen_params("std");
-    let stream = synth.synthesize_lazy(text, output_config)?
+    let stream = synth
+        .synthesize_lazy(text, output_config)?
         .map(|ar| ar.map(|a| a.samples));
     dev_utils::iterate_stream(stream)
 }
@@ -14,7 +14,8 @@ fn test_lazy_stream() -> SonataResult<()> {
 #[test]
 fn test_parallel_stream() -> SonataResult<()> {
     let (synth, text, output_config) = dev_utils::gen_params("std");
-    let stream = synth.synthesize_parallel(text, output_config)?
+    let stream = synth
+        .synthesize_parallel(text, output_config)?
         .map(|ar| ar.map(|a| a.samples));
     dev_utils::iterate_stream(stream)
 }

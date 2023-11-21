@@ -3,11 +3,11 @@ use libtashkeel_base::do_tashkeel;
 use ndarray::Axis;
 use ndarray::{Array, Array1, Array2, ArrayView, CowArray, Dim, IxDynImpl};
 use ort::{tensor::OrtOwnedTensor, Environment, GraphOptimizationLevel, SessionBuilder, Value};
-use sonata_core::{
-    Phonemes, SonataError, SonataModel, SonataResult, AudioInfo, SonataAudioResult,
-    Audio, AudioSamples,
-};
 use serde::Deserialize;
+use sonata_core::{
+    Audio, AudioInfo, AudioSamples, AudioStreamIterator, Phonemes, SonataAudioResult, SonataError,
+    SonataModel, SonataResult,
+};
 use std::any::Any;
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -692,12 +692,12 @@ impl SonataModel for VitsStreamingModel {
     fn supports_streaming_output(&self) -> bool {
         true
     }
-    fn stream_synthesis<'a>(
-        &'a self,
+    fn stream_synthesis(
+        &self,
         phonemes: String,
         chunk_size: usize,
         chunk_padding: usize,
-    ) -> SonataResult<Box<dyn Iterator<Item = SonataResult<AudioSamples>> + Send + Sync + 'a>> {
+    ) -> SonataResult<AudioStreamIterator> {
         let (pad_id, bos_id, eos_id) = self.get_meta_ids();
         let phonemes = self.phonemes_to_input_ids(&phonemes, pad_id, bos_id, eos_id);
         let encoder_outputs = self.infer_encoder(phonemes)?;
@@ -895,15 +895,15 @@ impl SpeechStreamer {
                 .as_slice()
                 .unwrap(),
         );
-        const N_SFX_SAMPLES: usize = 16;
+        const N_SFX_SAMPLES: usize = 48;
         let this_chunk_suffix = if audio_data.len() >= N_SFX_SAMPLES {
             let idx = audio_data.len() - N_SFX_SAMPLES..audio_data.len();
             Vec::from_iter(audio_data.drain(idx))
         } else {
             Default::default()
         };
-        let mut audio =
-            std::mem::replace(&mut self.last_chunk_suffix, this_chunk_suffix.into());
+        let mut audio = std::mem::replace(&mut self.last_chunk_suffix, this_chunk_suffix.into());
+        audio.normalize(1e-4);
         audio.overlap_with(&mut AudioSamples::from(audio_data));
         Ok(audio)
     }

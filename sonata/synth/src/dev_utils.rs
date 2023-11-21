@@ -1,7 +1,9 @@
-use sonata_synth::{AudioOutputConfig, AudioSamples, SonataModel, SonataResult, SonataSpeechSynthesizer};
-use sonata_piper::from_config_path as voice_from_config_path;
-use once_cell::sync::{OnceCell, Lazy};
 use core::hint::black_box;
+use once_cell::sync::{Lazy, OnceCell};
+use sonata_piper::from_config_path as voice_from_config_path;
+use sonata_synth::{
+    AudioOutputConfig, AudioSamples, SonataModel, SonataResult, SonataSpeechSynthesizer,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -67,7 +69,9 @@ pub fn gen_params(kind: &str) -> (SonataSpeechSynthesizer, String, Option<AudioO
 }
 
 #[inline(always)]
-pub fn iterate_stream(stream: impl Iterator<Item = SonataResult<AudioSamples>>)  -> SonataResult<()> {
+pub fn iterate_stream(
+    stream: impl Iterator<Item = SonataResult<AudioSamples>>,
+) -> SonataResult<()> {
     for result in stream {
         let audio = result?;
         let wav_bytes = black_box(audio.as_wave_bytes());
@@ -75,4 +79,3 @@ pub fn iterate_stream(stream: impl Iterator<Item = SonataResult<AudioSamples>>) 
     }
     Ok(())
 }
-

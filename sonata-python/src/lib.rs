@@ -1,8 +1,8 @@
 use once_cell::sync::OnceCell;
-use sonata_core::{SonataError, SonataModel, Audio, AudioInfo, AudioSamples};
+use sonata_core::{SonataError, SonataModel, Audio, AudioInfo};
 use sonata_synth::{
     AudioOutputConfig, SonataSpeechStreamLazy, SonataSpeechStreamParallel,
-    SonataSpeechSynthesizer, SYNTHESIS_THREAD_POOL,
+    SonataSpeechSynthesizer, RealtimeSpeechStream
 };
 use sonata_piper::PiperSynthesisConfig;
 use pyo3::create_exception;
@@ -102,7 +102,7 @@ impl WaveSamples {
         PyBytes::new(py, &bytes_vec).into()
     }
     fn save_to_file(&self, filename: &str) -> PySonataResult<()> {
-        Ok(self.0.save_to_file(filename).map_err(|e| SonataError::from(e))?)
+        Ok(self.0.save_to_file(filename).map_err(SonataError::from)?)
     }
     #[getter]
     fn sample_rate(&self) -> usize {
@@ -193,16 +193,10 @@ impl ParallelSpeechStream {
 }
 
 #[pyclass(weakref, module = "piper")]
-struct RealtimeSpeechStream(std::sync::mpsc::IntoIter<PySonataResult<AudioSamples>>);
-
-impl RealtimeSpeechStream {
-    fn new(receiver: std::sync::mpsc::Receiver<PySonataResult<AudioSamples>>) -> Self {
-        Self(receiver.into_iter())
-    }
-}
+struct PyRealtimeSpeechStream(RealtimeSpeechStream);
 
 #[pymethods]
-impl RealtimeSpeechStream {
+impl PyRealtimeSpeechStream {
     fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }
@@ -212,7 +206,7 @@ impl RealtimeSpeechStream {
         match result {
             Ok(samples) => Some(PyBytes::new(py, &samples.as_wave_bytes()).into()),
             Err(e) => {
-                PyErr::from(e).restore(py);
+                PyErr::from(PySonataError::from(e)).restore(py);
                 None
             }
         }
@@ -389,29 +383,14 @@ impl Sonata {
         audio_output_config: Option<PyAudioOutputConfig>,
         chunk_size: Option<usize>,
         chunk_padding: Option<usize>,
-    ) -> PySonataResult<RealtimeSpeechStream> {
-        let synth = Arc::clone(&self.0);
-        let (tx, rx) = std::sync::mpsc::channel::<PySonataResult<AudioSamples>>();
-        SYNTHESIS_THREAD_POOL.spawn_fifo(move || {
-            let stream_result = synth.synthesize_streamed(
-                text,
-                audio_output_config.map(|o| o.into()),
-                chunk_size.unwrap_or(45),
-                chunk_padding.unwrap_or(3),
-            );
-            let stream = match stream_result {
-                Ok(stream) => stream,
-                Err(e) => {
-                    tx.send(Err(e.into())).unwrap();
-                    return;
-                }
-            };
-            for result in stream {
-                let samples: PySonataResult<AudioSamples> = result.map_err(|e| e.into());
-                tx.send(samples).unwrap();
-            }
-        });
-        Ok(RealtimeSpeechStream::new(rx))
+    ) -> PySonataResult<PyRealtimeSpeechStream> {
+        let stream = self.0.synthesize_streamed(
+            text,
+            audio_output_config.map(|o| o.into()),
+            chunk_size.unwrap_or(45),
+            chunk_padding.unwrap_or(3),
+        )?;
+        Ok(PyRealtimeSpeechStream(stream))
     }
 
     fn synthesize_to_file(
@@ -448,6 +427,6 @@ fn sonata(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<WaveSamples>()?;
     m.add_class::<LazySpeechStream>()?;
     m.add_class::<ParallelSpeechStream>()?;
-    m.add_class::<RealtimeSpeechStream>()?;
+    m.add_class::<PyRealtimeSpeechStream>()?;
     Ok(())
 }

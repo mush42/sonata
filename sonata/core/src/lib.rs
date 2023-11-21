@@ -14,7 +14,7 @@ pub use audio_ops::{
 
 pub type SonataResult<T> = Result<T, SonataError>;
 pub type SonataAudioResult = SonataResult<Audio>;
-
+pub type AudioStreamIterator<'a> = Box<dyn Iterator<Item = SonataResult<AudioSamples>> + Send + Sync + 'a>;
 
 #[derive(Debug)]
 pub enum SonataError {
@@ -113,12 +113,12 @@ pub trait SonataModel {
     fn supports_streaming_output(&self) -> bool {
         false
     }
-    fn stream_synthesis<'a>(
-        &'a self,
+    fn stream_synthesis(
+        &self,
         #[allow(unused_variables)] phonemes: String,
         #[allow(unused_variables)] chunk_size: usize,
         #[allow(unused_variables)] chunk_padding: usize,
-    ) -> SonataResult<Box<dyn Iterator<Item = SonataResult<AudioSamples>> + Send + Sync + 'a>> {
+    ) -> SonataResult<AudioStreamIterator> {
         Ok(Box::new(
             [Err(SonataError::OperationError(
                 "Streaming synthesis is not supported for this model".to_string(),

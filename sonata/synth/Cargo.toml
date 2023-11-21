@@ -12,6 +12,7 @@ sonic-sys = { path = "../../sonic-sys" }
 audio-ops = { path = "../../audio-ops" }
 rayon = "1.7.0"
 once_cell = "1.18.0"
+kanal = { version = "0.1.0-pre8", default-features = false }
 
 [dev-dependencies]
 sonata-piper = { path = "../models/piper" }

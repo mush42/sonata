@@ -1,6 +1,7 @@
 mod utils;
 pub use sonata_core::*;
 
+use kanal::{unbounded, Receiver, SendError, Sender};
 use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -18,7 +19,7 @@ pub static SYNTHESIS_THREAD_POOL: Lazy<ThreadPool> = Lazy::new(|| {
         .unwrap_or(4);
     ThreadPoolBuilder::new()
         .thread_name(|i| format!("sonata_synth_{}", i))
-        .num_threads(num_cpus * 3)
+        .num_threads(num_cpus * 4)
         .build()
         .unwrap()
 });
@@ -154,17 +155,15 @@ impl SonataSpeechSynthesizer {
         chunk_size: usize,
         chunk_padding: usize,
     ) -> SonataResult<RealtimeSpeechStream> {
-        let phonemes = self.0.phonemize_text(&text)?;
-        let stream = self
-            .0
-            .stream_synthesis(phonemes.to_string(), chunk_size, chunk_padding)?;
+        let provider = self.create_synthesis_task_provider(text, output_config);
         let wavinfo = self.0.audio_output_info()?;
-        Ok(RealtimeSpeechStream::new(
-            stream,
-            output_config,
+        RealtimeSpeechStream::new(
+            provider,
+            chunk_size,
+            chunk_padding,
             wavinfo.sample_rate,
             wavinfo.num_channels,
-        ))
+        )
     }
 
     pub fn synthesize_to_file(
@@ -332,68 +331,87 @@ impl Iterator for SonataSpeechStreamParallel {
     }
 }
 
-pub struct RealtimeSpeechStream<'a> {
-    stream: Box<dyn Iterator<Item = SonataResult<AudioSamples>> + Send + Sync + 'a>,
-    output_config: Option<AudioOutputConfig>,
-    sample_rate: usize,
-    num_channels: usize,
-    finished: bool,
-}
+pub struct RealtimeSpeechStream(Receiver<SonataResult<AudioSamples>>);
 
-impl<'a> RealtimeSpeechStream<'a> {
+impl RealtimeSpeechStream {
     fn new(
-        stream: Box<dyn Iterator<Item = SonataResult<AudioSamples>> + Send + Sync + 'a>,
-        output_config: Option<AudioOutputConfig>,
+        provider: SpeechSynthesisTaskProvider,
+        chunk_size: usize,
+        chunk_padding: usize,
         sample_rate: usize,
         num_channels: usize,
-    ) -> Self {
-        Self {
-            stream,
-            output_config,
-            sample_rate,
-            num_channels,
-            finished: false,
-        }
+    ) -> SonataResult<Self> {
+        let phonemes = provider.get_phonemes()?.into_iter();
+        let (tx, rx) = unbounded();
+        SYNTHESIS_THREAD_POOL.spawn(move || {
+            for ph_sent in phonemes {
+                match provider
+                    .model
+                    .stream_synthesis(ph_sent, chunk_size, chunk_padding)
+                {
+                    Ok(stream) => {
+                        let send_result = RealtimeSpeechStream::process_rt_stream(
+                            stream,
+                            &tx,
+                            provider.output_config.as_ref(),
+                            sample_rate,
+                            num_channels,
+                        );
+                        if send_result.is_err() {
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        tx.send(Err(e)).ok();
+                        return;
+                    }
+                };
+            }
+        });
+        Ok(Self(rx))
     }
-    fn apply_audio_output_config(
-        &self,
-        wav_result: SonataResult<AudioSamples>,
-    ) -> SonataResult<AudioSamples> {
-        if let Some(ref output_config) = self.output_config {
-            output_config.apply_to_raw_samples(wav_result?, self.sample_rate, self.num_channels)
+    #[inline(always)]
+    fn process_rt_stream(
+        stream: AudioStreamIterator,
+        tx: &Sender<SonataResult<AudioSamples>>,
+        audio_output_config: Option<&AudioOutputConfig>,
+        sample_rate: usize,
+        num_channels: usize,
+    ) -> Result<(), SendError> {
+        if let Some(output_config) = audio_output_config {
+            for result in stream {
+                match result {
+                    Ok(samples) => {
+                        tx.send(output_config.apply_to_raw_samples(
+                            samples,
+                            sample_rate,
+                            num_channels,
+                        ))?;
+                    }
+                    Err(e) => {
+                        tx.send(Err(e))?;
+                    }
+                };
+            }
+            if let Some(silence_ms) = output_config.appended_silence_ms {
+                let silence_result =
+                    output_config.generate_silence(silence_ms as usize, sample_rate, num_channels);
+                tx.send(silence_result)?;
+            }
+            Ok(())
         } else {
-            wav_result
+            for result in stream {
+                tx.send(result)?;
+            }
+            Ok(())
         }
     }
 }
 
-impl<'a> Iterator for RealtimeSpeechStream<'a> {
+impl Iterator for RealtimeSpeechStream {
     type Item = SonataResult<AudioSamples>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.finished {
-            return None;
-        }
-        match self.stream.next() {
-            Some(raw_samples) => Some(self.apply_audio_output_config(raw_samples)),
-            None => {
-                self.finished = true;
-                self.output_config.as_ref().and_then(|output_config| {
-                    output_config.appended_silence_ms.map(|time_ms| {
-                        output_config.generate_silence(
-                            time_ms as usize,
-                            self.sample_rate,
-                            self.num_channels,
-                        )
-                    })
-                })
-            }
-        }
-    }
-}
-
-impl std::fmt::Debug for RealtimeSpeechStream<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(f, "RealtimeSpeechStream Iterator")
+        self.0.recv().ok()
     }
 }

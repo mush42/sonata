@@ -2,13 +2,12 @@ use ffi_support::{call_with_result, define_string_destructor, ErrorCode, ExternE
 use once_cell::sync::OnceCell;
 use sonata_core::{AudioSamples, SonataError, SonataModel, SonataResult};
 use sonata_piper::PiperSynthesisConfig;
-use sonata_synth::{AudioOutputConfig, SonataSpeechSynthesizer, SYNTHESIS_THREAD_POOL};
+use sonata_synth::{AudioOutputConfig, SonataSpeechSynthesizer};
 use std::any::Any;
 use std::ops::Deref;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::mpsc::channel;
 
 
 pub type SpeechSynthesisCallback = extern "C" fn(ByteBuffer) -> bool;
@@ -268,15 +267,9 @@ fn _synthesize(
             iterate_stream(stream, params.callback)
         }
         SynthesisMode::REALTIME => {
-            let synth: Arc<SonataSpeechSynthesizer> = Arc::clone(&voice.0);
-            let (tx, rx) = channel();
-            SYNTHESIS_THREAD_POOL.spawn(move || {
-                let stream = synth.synthesize_streamed(text, audio_output_config, 72, 3).unwrap();
-                stream.for_each(|result| {
-                    tx.send(result).unwrap();
-                });
-            });
-            iterate_stream(rx.into_iter(), params.callback)
+            let stream = synth
+                .synthesize_streamed(text, audio_output_config, 72, 3)?;
+            iterate_stream(stream, params.callback)
         }
     }
 }
