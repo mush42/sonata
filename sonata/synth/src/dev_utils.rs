@@ -8,11 +8,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 const TEXT: &[&'static str] = &[
-    "Technology is not inevitable.",
-    "Powerful drivers must exist in order for people to keep pushing the envelope and continue demanding more and more from a particular field of knowledge.",
+    "Technology is not inevitable, powerful drivers must exist in order for people to keep pushing the envelope and continue demanding more and more from a particular field of knowledge.",
 "Cheaper Communications",
-"The first and most important driver is our demand for ever cheaper and easier communications.",
-"All of human society depends on communications."
+"The first and most important driver is our demand for ever cheaper and easier communications, since all of human society depends on communications."
 ];
 const CRATE_DIR: &'static str = env!("CARGO_MANIFEST_DIR");
 static ORT_ENVIRONMENT: OnceCell<Arc<ort::Environment>> = OnceCell::new();
