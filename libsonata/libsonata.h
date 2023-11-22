@@ -1,89 +1,85 @@
 /* Generated with cbindgen:0.26.0 */
 
-#include <cstdarg>
-#include <cstdint>
-#include <cstdlib>
-#include <ostream>
-#include <new>
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdlib.h>
 
-constexpr static const int32_t FAILED_TO_LOAD_RESOURCE = 17;
+#define FAILED_TO_LOAD_RESOURCE 17
 
-constexpr static const int32_t PHONEMIZATION_ERROR = 18;
+#define PHONEMIZATION_ERROR 18
 
-constexpr static const int32_t OPERATION_ERROR = 19;
+#define OPERATION_ERROR 19
 
-constexpr static const int32_t UNKNOWN_ERROR = 21;
+#define UNKNOWN_ERROR 21
 
-enum class SynthesisMode {
+typedef enum SynthesisMode {
   LAZY = 0,
   PARALLEL = 1,
   REALTIME = 2,
-};
+} SynthesisMode;
 
-struct SonataVoice;
+typedef struct SonataVoice SonataVoice;
 
-struct ByteBuffer {
+typedef struct ByteBuffer {
   int64_t len;
   uint8_t *data;
-};
+} ByteBuffer;
 
-using FfiStr = const char*;
+typedef const char *FfiStr;
 
-using ErrorCode = int32_t;
-constexpr static const ErrorCode ErrorCode_SUCCESS = 0;
-constexpr static const ErrorCode ErrorCode_PANIC = -1;
-constexpr static const ErrorCode ErrorCode_INVALID_HANDLE = -1000;
+typedef int32_t ErrorCode;
+#define ErrorCode_SUCCESS 0
+#define ErrorCode_PANIC -1
+#define ErrorCode_INVALID_HANDLE -1000
 
-struct ExternError {
+typedef struct ExternError {
   ErrorCode code;
   char *message;
-};
+} ExternError;
 
-struct AudioInfo {
+typedef struct AudioInfo {
   uint32_t sample_rate;
   uint32_t num_channels;
   uint32_t sample_width;
-};
+} AudioInfo;
 
-struct PiperSynthConfig {
+typedef struct PiperSynthConfig {
   uint32_t speaker;
   float length_scale;
   float noise_scale;
   float noise_w;
-};
+} PiperSynthConfig;
 
-using SpeechSynthesisCallback = bool(*)(ByteBuffer);
+typedef bool (*SpeechSynthesisCallback)(struct ByteBuffer);
 
-struct SynthesisParams {
-  SynthesisMode mode;
+typedef struct SynthesisParams {
+  enum SynthesisMode mode;
   uint8_t rate;
   uint8_t volume;
   uint8_t pitch;
   uint32_t appended_silence_ms;
   SpeechSynthesisCallback callback;
-};
-
-extern "C" {
+} SynthesisParams;
 
 void libsonataFreeString(int8_t *string_ptr);
 
-void libsonataFreeByteBuffer(ByteBuffer buf);
+void libsonataFreeByteBuffer(struct ByteBuffer buf);
 
-SonataVoice *libsonataLoadVoiceFromConfigPath(FfiStr config_path_ptr, ExternError *out_error);
+struct SonataVoice *libsonataLoadVoiceFromConfigPath(FfiStr config_path_ptr,
+                                                     struct ExternError *out_error);
 
-void libsonataUnloadSonataVoice(SonataVoice *voice_ptr);
+void libsonataUnloadSonataVoice(struct SonataVoice *voice_ptr);
 
-void libsonataGetAudioInfo(SonataVoice *voice_ptr,
-                           AudioInfo *audio_info_ptr,
-                           ExternError *out_error);
+void libsonataGetAudioInfo(struct SonataVoice *voice_ptr,
+                           struct AudioInfo *audio_info_ptr,
+                           struct ExternError *out_error);
 
-void libsonataSetPiperSynthConfig(SonataVoice *voice_ptr,
-                                  PiperSynthConfig synth_config,
-                                  ExternError *out_error);
+void libsonataSetPiperSynthConfig(struct SonataVoice *voice_ptr,
+                                  struct PiperSynthConfig synth_config,
+                                  struct ExternError *out_error);
 
-void libsonataSpeak(SonataVoice *voice_ptr,
+void libsonataSpeak(struct SonataVoice *voice_ptr,
                     FfiStr text_ptr,
-                    SynthesisParams params,
-                    ExternError *out_error);
-
-} // extern "C"
+                    struct SynthesisParams params,
+                    struct ExternError *out_error);
