@@ -827,6 +827,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "libloading"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c571b676ddfc9a8c12f1f3d3085a7b163966a8fd8098a90640953ce5f6170161"
+dependencies = [
+ "cfg-if",
+ "windows-sys",
+]
+
+[[package]]
 name = "libsonata"
 version = "0.1.0"
 dependencies = [
@@ -834,7 +844,7 @@ dependencies = [
  "ffi-support",
  "libc",
  "once_cell",
- "ort",
+ "ort 1.16.3",
  "sonata-core",
  "sonata-piper",
  "sonata-synth",
@@ -847,7 +857,7 @@ dependencies = [
  "log",
  "ndarray",
  "once_cell",
- "ort",
+ "ort 1.16.3",
  "serde",
  "serde_json",
  "thiserror",
@@ -1049,7 +1059,7 @@ dependencies = [
  "flate2",
  "lazy_static",
  "libc",
- "libloading",
+ "libloading 0.7.4",
  "ndarray",
  "tar",
  "thiserror",
@@ -1057,6 +1067,26 @@ dependencies = [
  "vswhom",
  "winapi",
 ]
+
+[[package]]
+name = "ort"
+version = "2.0.0-alpha.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1d06eb9400ebe2c4caf0777d1f84010f33bfad460773c09eaa7716b6dc5ffbf"
+dependencies = [
+ "libloading 0.8.1",
+ "ndarray",
+ "once_cell",
+ "ort-sys",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "ort-sys"
+version = "2.0.0-alpha.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c1c9497f4d60c5e895e1516a7bdb76abd671738555897c38f8ac7d3c17fb225"
 
 [[package]]
 name = "os_str_bytes"
@@ -1547,8 +1577,7 @@ dependencies = [
  "async-stream",
  "env_logger",
  "log",
- "once_cell",
- "ort",
+ "ort 2.0.0-alpha.1",
  "prost",
  "sonata-core",
  "sonata-piper",
@@ -1567,7 +1596,7 @@ dependencies = [
  "espeak-phonemizer",
  "libtashkeel_base",
  "ndarray",
- "ort",
+ "ort 2.0.0-alpha.1",
  "serde",
  "serde_json",
  "sonata-core",
@@ -1577,8 +1606,7 @@ dependencies = [
 name = "sonata-python"
 version = "0.2.0"
 dependencies = [
- "once_cell",
- "ort",
+ "ort 2.0.0-alpha.1",
  "pyo3",
  "sonata-core",
  "sonata-piper",
@@ -1593,7 +1621,7 @@ dependencies = [
  "divan",
  "kanal",
  "once_cell",
- "ort",
+ "ort 2.0.0-alpha.1",
  "rayon",
  "sonata-core",
  "sonata-piper",

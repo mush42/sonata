@@ -1,8 +1,8 @@
 use espeak_phonemizer::text_to_phonemes;
 use libtashkeel_base::do_tashkeel;
 use ndarray::Axis;
-use ndarray::{Array, Array1, Array2, ArrayView, CowArray, Dim, IxDynImpl};
-use ort::{tensor::OrtOwnedTensor, Environment, GraphOptimizationLevel, SessionBuilder, Value};
+use ndarray::{Array, Array1, Array2, ArrayView, Dim, IxDynImpl};
+use ort::{GraphOptimizationLevel, Session, SessionInputs, SessionOutputs, Value};
 use serde::Deserialize;
 use sonata_core::{
     Audio, AudioInfo, AudioSamples, AudioStreamIterator, Phonemes, SonataAudioResult, SonataError,
@@ -77,21 +77,15 @@ fn create_tashkeel_engine(
     }
 }
 
-fn create_inference_session(
-    model_path: &Path,
-    ort_env: &'static Arc<Environment>,
-) -> Result<ort::Session, ort::OrtError> {
-    SessionBuilder::new(ort_env)?
+fn create_inference_session(model_path: &Path) -> Result<ort::Session, ort::Error> {
+    Session::builder()?
         .with_optimization_level(GraphOptimizationLevel::Disable)?
         .with_memory_pattern(false)?
         .with_parallel_execution(false)?
         .with_model_from_file(model_path)
 }
 
-pub fn from_config_path(
-    config_path: &Path,
-    ort_env: &'static Arc<Environment>,
-) -> SonataResult<Arc<dyn SonataModel + Send + Sync>> {
+pub fn from_config_path(config_path: &Path) -> SonataResult<Arc<dyn SonataModel + Send + Sync>> {
     let (config, synth_config) = load_model_config(config_path)?;
     if config.streaming.unwrap_or_default() {
         Ok(Arc::new(VitsStreamingModel::from_config(
@@ -99,7 +93,6 @@ pub fn from_config_path(
             synth_config,
             &config_path.with_file_name("encoder.onnx"),
             &config_path.with_file_name("decoder.onnx"),
-            ort_env,
         )?))
     } else {
         let Some(onnx_filename) = config_path.file_stem() else {
@@ -112,7 +105,6 @@ pub fn from_config_path(
             config,
             synth_config,
             &config_path.with_file_name(onnx_filename),
-            ort_env,
         )?))
     }
 }
@@ -307,11 +299,10 @@ impl VitsModel {
     pub fn new(
         config_path: PathBuf,
         onnx_path: &Path,
-        ort_env: &'static Arc<Environment>,
     ) -> SonataResult<Self> {
         match load_model_config(&config_path) {
             Ok((config, synth_config)) => {
-                Self::from_config(config, synth_config, onnx_path, ort_env)
+                Self::from_config(config, synth_config, onnx_path)
             }
             Err(error) => Err(error),
         }
@@ -320,9 +311,8 @@ impl VitsModel {
         config: ModelConfig,
         synth_config: PiperSynthesisConfig,
         onnx_path: &Path,
-        ort_env: &'static Arc<Environment>,
     ) -> SonataResult<Self> {
-        let session = match create_inference_session(onnx_path, ort_env) {
+        let session = match create_inference_session(onnx_path) {
             Ok(session) => session,
             Err(err) => {
                 return Err(SonataError::OperationError(format!(
@@ -358,38 +348,32 @@ impl VitsModel {
 
         let input_len = input_phonemes.len();
         let phoneme_inputs =
-            CowArray::from(Array2::<i64>::from_shape_vec((1, input_len), input_phonemes).unwrap())
-                .into_dyn();
-
-        let input_lengths = CowArray::from(Array1::<i64>::from_iter([input_len as i64])).into_dyn();
-
+            Array2::<i64>::from_shape_vec((1, input_len), input_phonemes).unwrap();
+        let input_lengths = Array1::<i64>::from_iter([input_len as i64]);
         let scales = Array1::<f32>::from_iter([
             synth_config.noise_scale,
             synth_config.length_scale,
             synth_config.noise_w,
         ]);
-        let scales = CowArray::from(scales).into_dyn();
-
         let speaker_id = if self.config.num_speakers > 1 {
             let sid = synth_config.speaker.unwrap_or(0);
-
-            Some(CowArray::from(Array1::<i64>::from_iter([sid])).into_dyn())
+            Some(Array1::<i64>::from_iter([sid]))
         } else {
             None
         };
 
         let session = &self.session;
         let timer = std::time::Instant::now();
-        let outputs: Vec<Value> = {
+        let outputs = {
             let mut inputs = vec![
-                Value::from_array(session.allocator(), &phoneme_inputs).unwrap(),
-                Value::from_array(session.allocator(), &input_lengths).unwrap(),
-                Value::from_array(session.allocator(), &scales).unwrap(),
+                Value::from_array(phoneme_inputs).unwrap(),
+                Value::from_array(input_lengths).unwrap(),
+                Value::from_array(scales).unwrap(),
             ];
-            if let Some(ref sid_tensor) = speaker_id {
-                inputs.push(Value::from_array(session.allocator(), sid_tensor).unwrap());
+            if let Some(sid_tensor) = speaker_id {
+                inputs.push(Value::from_array(sid_tensor).unwrap());
             }
-            match session.run(inputs) {
+            match session.run(SessionInputs::from(inputs.as_slice())) {
                 Ok(out) => out,
                 Err(e) => {
                     return Err(SonataError::OperationError(format!(
@@ -401,7 +385,7 @@ impl VitsModel {
         };
         let inference_ms = timer.elapsed().as_millis() as f32;
 
-        let outputs: OrtOwnedTensor<f32, _> = match outputs[0].try_extract() {
+        let outputs = match outputs[0].extract_tensor::<f32>() {
             Ok(out) => out,
             Err(e) => {
                 return Err(SonataError::OperationError(format!(
@@ -420,21 +404,7 @@ impl VitsModel {
         ))
     }
     pub fn get_input_output_info(&self) -> SonataResult<Vec<String>> {
-        Ok(self
-            .session
-            .inputs
-            .iter()
-            .map(|i| {
-                let name = i.name.clone();
-                let dim: Vec<String> = i
-                    .dimensions
-                    .iter()
-                    .map(|o| o.unwrap_or(42).to_string())
-                    .collect();
-                let dt = i.input_type;
-                format!("#name: {}#dims: {}#type: {:?}", name, dim.join(", "), dt)
-            })
-            .collect())
+        todo!()
     }
 }
 
@@ -528,9 +498,8 @@ impl VitsStreamingModel {
         synth_config: PiperSynthesisConfig,
         encoder_path: &Path,
         decoder_path: &Path,
-        ort_env: &'static Arc<Environment>,
     ) -> SonataResult<Self> {
-        let encoder_model = match create_inference_session(encoder_path, ort_env) {
+        let encoder_model = match create_inference_session(encoder_path) {
             Ok(model) => model,
             Err(err) => {
                 return Err(SonataError::OperationError(format!(
@@ -539,7 +508,7 @@ impl VitsStreamingModel {
                 )))
             }
         };
-        let decoder_model = match create_inference_session(decoder_path, ort_env) {
+        let decoder_model = match create_inference_session(decoder_path) {
             Ok(model) => Arc::new(model),
             Err(err) => {
                 return Err(SonataError::OperationError(format!(
@@ -576,22 +545,18 @@ impl VitsStreamingModel {
 
         let input_len = input_phonemes.len();
         let phoneme_inputs =
-            CowArray::from(Array2::<i64>::from_shape_vec((1, input_len), input_phonemes).unwrap())
-                .into_dyn();
-
-        let input_lengths = CowArray::from(Array1::<i64>::from_iter([input_len as i64])).into_dyn();
+            Array2::<i64>::from_shape_vec((1, input_len), input_phonemes).unwrap();
+        let input_lengths = Array1::<i64>::from_iter([input_len as i64]);
 
         let scales = Array1::<f32>::from_iter([
             synth_config.noise_scale,
             synth_config.length_scale,
             synth_config.noise_w,
         ]);
-        let scales = CowArray::from(scales).into_dyn();
 
         let speaker_id = if self.config.num_speakers > 1 {
             let sid = synth_config.speaker.unwrap_or(0);
-
-            Some(CowArray::from(Array1::<i64>::from_iter([sid])).into_dyn())
+            Some(Array1::<i64>::from_iter([sid]))
         } else {
             None
         };
@@ -599,14 +564,14 @@ impl VitsStreamingModel {
         let session = &self.encoder_model;
         {
             let mut inputs = vec![
-                Value::from_array(session.allocator(), &phoneme_inputs).unwrap(),
-                Value::from_array(session.allocator(), &input_lengths).unwrap(),
-                Value::from_array(session.allocator(), &scales).unwrap(),
+                Value::from_array(phoneme_inputs).unwrap(),
+                Value::from_array(input_lengths).unwrap(),
+                Value::from_array(scales).unwrap(),
             ];
-            if let Some(ref sid_tensor) = speaker_id {
-                inputs.push(Value::from_array(session.allocator(), sid_tensor).unwrap());
+            if let Some(sid_tensor) = speaker_id {
+                inputs.push(Value::from_array(sid_tensor).unwrap());
             }
-            match session.run(inputs) {
+            match session.run(SessionInputs::from(inputs.as_slice())) {
                 Ok(ort_values) => EncoderOutputs::from_values(ort_values),
                 Err(e) => Err(SonataError::OperationError(format!(
                     "Failed to run model inference. Error: {}",
@@ -720,9 +685,9 @@ struct EncoderOutputs {
 
 impl EncoderOutputs {
     #[inline(always)]
-    fn from_values(values: Vec<Value>) -> SonataResult<Self> {
+    fn from_values(values: SessionOutputs) -> SonataResult<Self> {
         let z = {
-            let z_t: OrtOwnedTensor<f32, _> = match values[0].try_extract() {
+            let z_t = match values[0].extract_tensor::<f32>() {
                 Ok(out) => out,
                 Err(e) => {
                     return Err(SonataError::OperationError(format!(
@@ -734,7 +699,7 @@ impl EncoderOutputs {
             z_t.view().clone().into_owned()
         };
         let y_mask = {
-            let y_mask_t: OrtOwnedTensor<f32, _> = match values[1].try_extract() {
+            let y_mask_t = match values[1].extract_tensor::<f32>() {
                 Ok(out) => out,
                 Err(e) => {
                     return Err(SonataError::OperationError(format!(
@@ -746,7 +711,7 @@ impl EncoderOutputs {
             y_mask_t.view().clone().into_owned()
         };
         let g = if values.len() == 3 {
-            let g_t: OrtOwnedTensor<f32, _> = match values[2].try_extract() {
+            let g_t = match values[2].extract_tensor::<f32>() {
                 Ok(out) => out,
                 Err(e) => {
                     return Err(SonataError::OperationError(format!(
@@ -762,18 +727,15 @@ impl EncoderOutputs {
         Ok(Self { z, y_mask, g })
     }
     fn infer_decoder(&self, session: &ort::Session) -> SonataResult<AudioSamples> {
-        let outputs: Vec<Value> = {
-            let z_input = CowArray::from(self.z.view());
-            let y_mask_input = CowArray::from(self.y_mask.view());
-            let g_input = CowArray::from(self.g.view());
+        let outputs  = {
             let mut inputs = vec![
-                Value::from_array(session.allocator(), &z_input).unwrap(),
-                Value::from_array(session.allocator(), &y_mask_input).unwrap(),
+                Value::from_array(self.z.view()).unwrap(),
+                Value::from_array(self.y_mask.view()).unwrap(),
             ];
-            if !g_input.is_empty() {
-                inputs.push(Value::from_array(session.allocator(), &g_input).unwrap())
+            if !self.g.is_empty() {
+                inputs.push(Value::from_array(self.g.view()).unwrap())
             }
-            match session.run(inputs) {
+            match session.run(SessionInputs::from(inputs.as_slice())) {
                 Ok(out) => out,
                 Err(e) => {
                     return Err(SonataError::OperationError(format!(
@@ -783,7 +745,7 @@ impl EncoderOutputs {
                 }
             }
         };
-        match outputs[0].try_extract() {
+        match outputs[0].extract_tensor::<f32>() {
             Ok(out) => Ok(Vec::from(out.view().as_slice().unwrap()).into()),
             Err(e) => Err(SonataError::OperationError(format!(
                 "Failed to run model inference. Error: {}",
@@ -846,24 +808,20 @@ impl SpeechStreamer {
             (Some(chunk_end), Some(-self.chunk_padding))
         };
         let index = ndarray::Slice::new(start_index, end_index, 1);
-        let session = &self.decoder_model;
         {
             let z_view = self.encoder_outputs.z.view();
             let y_mask_view = self.encoder_outputs.y_mask.view();
-            let z_chunk = z_view.slice_axis(Axis(2), index).into_dyn();
-            let y_mask_chunk = y_mask_view.slice_axis(Axis(2), index).into_dyn();
-            let z_input = CowArray::from(z_chunk);
-            let y_mask_input = CowArray::from(y_mask_chunk);
-            let g_input = CowArray::from(self.encoder_outputs.g.view());
+            let z_chunk = z_view.slice_axis(Axis(2), index);
+            let y_mask_chunk = y_mask_view.slice_axis(Axis(2), index);
             let mut inputs = vec![
-                Value::from_array(session.allocator(), &z_input).unwrap(),
-                Value::from_array(session.allocator(), &y_mask_input).unwrap(),
+                Value::from_array(z_chunk).unwrap(),
+                Value::from_array(y_mask_chunk).unwrap(),
             ];
-            if !g_input.is_empty() {
-                inputs.push(Value::from_array(session.allocator(), &g_input).unwrap())
+            if !self.encoder_outputs.g.is_empty() {
+                inputs.push(Value::from_array(self.encoder_outputs.g.view()).unwrap())
             }
-            match session.run(inputs) {
-                Ok(outputs) => match outputs[0].try_extract() {
+            match self.decoder_model.run(SessionInputs::from(inputs.as_slice())) {
+                Ok(outputs) => match outputs[0].extract_tensor::<f32>() {
                     Ok(audio_t) => {
                         self.process_chunk_audio(audio_t.view().view(), start_padding, end_padding)
                     }
@@ -881,7 +839,7 @@ impl SpeechStreamer {
     }
     #[inline(always)]
     fn process_chunk_audio(
-        &mut self,
+        &self,
         audio_view: ArrayView<f32, Dim<IxDynImpl>>,
         start_padding: isize,
         end_padding: Option<isize>,
