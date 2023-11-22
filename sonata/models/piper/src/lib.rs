@@ -803,7 +803,6 @@ struct SpeechStreamer {
     num_frames: isize,
     chunk_enumerater: std::vec::IntoIter<usize>,
     one_shot: bool,
-    last_chunk_suffix: AudioSamples,
 }
 
 impl SpeechStreamer {
@@ -828,7 +827,6 @@ impl SpeechStreamer {
             num_frames: num_frames as isize,
             chunk_enumerater: Vec::from_iter(0..num_chunks).into_iter(),
             one_shot,
-            last_chunk_suffix: Default::default(),
         }
     }
     fn synthesize_chunk(&mut self, chunk_idx: isize) -> SonataResult<AudioSamples> {
@@ -889,22 +887,22 @@ impl SpeechStreamer {
         end_padding: Option<isize>,
     ) -> SonataResult<AudioSamples> {
         let audio_idx = ndarray::Slice::new(start_padding, end_padding, 1);
-        let mut audio_data = Vec::from(
+        let mut audio: AudioSamples = Vec::from(
             audio_view
                 .slice_axis(Axis(2), audio_idx)
                 .as_slice()
                 .unwrap(),
-        );
-        const N_SFX_SAMPLES: usize = 48;
-        let this_chunk_suffix = if audio_data.len() >= N_SFX_SAMPLES {
-            let idx = audio_data.len() - N_SFX_SAMPLES..audio_data.len();
-            Vec::from_iter(audio_data.drain(idx))
-        } else {
-            Default::default()
-        };
-        let mut audio = std::mem::replace(&mut self.last_chunk_suffix, this_chunk_suffix.into());
-        audio.normalize(1e-4);
-        audio.overlap_with(&mut AudioSamples::from(audio_data));
+        ).into();
+        const N_SFX_SAMPLES: usize = 128;
+        const CROSSFADE_SAMPLES: usize = 32;
+        if audio.len() >= N_SFX_SAMPLES {
+            let idx = (audio.len() - N_SFX_SAMPLES)..audio.len();
+            audio.take_range(idx);
+        }
+        if audio.len() >= N_SFX_SAMPLES {
+            audio.take_range(0..N_SFX_SAMPLES);
+        }
+        audio.crossfade(CROSSFADE_SAMPLES);
         Ok(audio)
     }
     fn consume(&mut self) {

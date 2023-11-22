@@ -68,7 +68,7 @@ fn calculate_hann_window(window_length: usize) -> Vec<f32> {
   // Compute the first half of the Hann window values
   // Formula used: w(n) = 0.5 - 0.5 * cos(2π * n / (N - 1))
   for i in 0..half_length {
-    window[i] = 0.5 - 0.5 * ((scaling_factor * (i as f32)).cos() as f32);
+    window[i] = 0.5 - 0.5 * ((scaling_factor * (i as f32)).cos());
     window[window_length - 1 - i] = window[i];
   }
 

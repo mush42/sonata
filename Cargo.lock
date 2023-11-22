@@ -129,6 +129,7 @@ name = "audio-ops"
 version = "1.0.0"
 dependencies = [
  "divan",
+ "once_cell",
  "riff-wave",
 ]
 

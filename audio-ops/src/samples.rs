@@ -1,3 +1,5 @@
+use crate::hanning_window;
+
 const PI: f32 = std::f32::consts::PI;
 const I16MIN_F32: f32 = i16::MIN as f32;
 const I16MAX_F32: f32 = i16::MAX as f32;
@@ -31,7 +33,13 @@ impl AudioSamples {
         self.0
     }
     pub fn take(&mut self) -> Vec<f32> {
-        std::mem::take(self.0.as_mut())
+        std::mem::take(&mut self.0)
+    }
+    pub fn take_range(&mut self, mut  sample_range: std::ops::Range<usize>) -> Vec<f32> {
+        sample_range.end = sample_range.end.min(self.len());
+        Vec::from_iter(
+            self.0.drain(sample_range)
+        )
     }
     pub fn len(&self) -> usize {
         self.0.len()
@@ -82,6 +90,13 @@ impl AudioSamples {
             .abs();
         let factor = self_max.max(max_value) / max_value.abs();
         self.0.iter_mut().for_each(|f| *f /= factor);
+    }
+    pub fn apply_hanning_window(&mut self) {
+        let samples = self.0.as_mut_slice();
+        let h_win = hanning_window::get_hann_window(samples.len());
+        for (sample, ratio) in samples.iter_mut().zip(h_win) {
+            *sample *= ratio;
+        }
     }
     pub fn overlap_with(&mut self, other: &mut Self) {
         if !self.is_empty() {
