@@ -229,10 +229,16 @@ pub unsafe extern "C" fn libsonataSpeak(
 
 fn get_ort_environment() -> &'static Arc<ort::Environment> {
     ORT_ENVIRONMENT.get_or_init(|| {
+        #[allow(unused_mut)]
+        let mut execution_providers = vec![ort::ExecutionProvider::CPU(Default::default())];
+        #[cfg(target_os = "android")]
+        execution_providers.insert(0, ort::ExecutionProvider::NNAPI(Default::default()));
+        #[cfg(target_os = "ios")]
+        execution_providers.insert(0, ort::ExecutionProvider::CoreML(Default::default()));
         Arc::new(
             ort::Environment::builder()
                 .with_name("sonata")
-                .with_execution_providers([ort::ExecutionProvider::CPU(Default::default())])
+                .with_execution_providers(execution_providers)
                 .build()
                 .unwrap(),
         )

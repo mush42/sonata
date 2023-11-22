@@ -29,5 +29,17 @@ default-features = false
 features = ["load-dynamic",]
 optional = true
 
+[target.'cfg(target_os="android")'.dependencies.ort]
+version = "1.16.3"
+default-features = false
+features = ["load-dynamic", "nnapi"]
+optional = true
+
+[target.'cfg(target_os="ios")'.dependencies.ort]
+version = "1.16.3"
+default-features = false
+features = ["load-dynamic", "coreml"]
+optional = true
+
 [build-dependencies]
 cbindgen = "0.26.0"
