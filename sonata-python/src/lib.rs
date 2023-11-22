@@ -1,4 +1,3 @@
-use once_cell::sync::OnceCell;
 use sonata_core::{SonataError, SonataModel, Audio, AudioInfo};
 use sonata_synth::{
     AudioOutputConfig, SonataSpeechStreamLazy, SonataSpeechStreamParallel,
@@ -14,7 +13,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 type PySonataResult<T> = Result<T, PySonataError>;
-static ORT_ENVIRONMENT: OnceCell<Arc<ort::Environment>> = OnceCell::new();
 
 create_exception!(
     piper,
@@ -239,26 +237,12 @@ impl PiperScales {
 #[pyo3(name = "PiperModel")]
 struct PiperModel(Arc<dyn SonataModel + Send + Sync>);
 
-impl PiperModel {
-    fn get_ort_environment() -> &'static Arc<ort::Environment> {
-        ORT_ENVIRONMENT.get_or_init(|| {
-            Arc::new(
-                ort::Environment::builder()
-                    .with_name("piper")
-                    .with_execution_providers([ort::ExecutionProvider::CPU(Default::default())])
-                    .build()
-                    .unwrap(),
-            )
-        })
-    }
-}
-
 #[pymethods]
 impl PiperModel {
     #[new]
     fn new(config_path: &str) -> PySonataResult<Self> {
         let vits =
-            sonata_piper::from_config_path(&PathBuf::from(config_path), Self::get_ort_environment())?;
+            sonata_piper::from_config_path(&PathBuf::from(config_path))?;
         Ok(Self(vits))
     }
     #[getter]

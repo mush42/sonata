@@ -1,4 +1,3 @@
-use once_cell::sync::OnceCell;
 use grpc::sonata_grpc_server::{SonataGrpc, SonataGrpcServer};
 use sonata_core::{SonataError, SonataModel, SonataResult};
 use sonata_synth::{AudioOutputConfig, SonataSpeechStreamLazy, SonataSpeechSynthesizer};
@@ -17,7 +16,6 @@ type SonataGrpcResult<T> = Result<T, SonataGrpcError>;
 
 const DEFAULT_SONATA_GRPC_SERVER_PORT: u16 = 49314;
 const VOICE_ID_REDUCTION_FACTOR: u64 = 10000000000000;
-static ORT_ENVIRONMENT: OnceCell<Arc<ort::Environment>> = OnceCell::new();
 
 pub mod grpc {
     tonic::include_proto!("sonata_grpc");
@@ -81,17 +79,6 @@ impl SonataGrpcService {
     fn new() -> Self {
         Self(Default::default())
     }
-    fn get_ort_environment() -> &'static Arc<ort::Environment> {
-        ORT_ENVIRONMENT.get_or_init(|| {
-            Arc::new(
-                ort::Environment::builder()
-                    .with_name("sonata")
-                    .with_execution_providers([ort::ExecutionProvider::CPU(Default::default())])
-                    .build()
-                    .unwrap(),
-            )
-        })
-    }
     fn _load_sonata_voice(&self, config_path: PathBuf) -> SonataGrpcResult<grpc::VoiceInfo> {
         let voice_id = if config_path.is_file() {
             let voice_path = config_path
@@ -109,7 +96,7 @@ impl SonataGrpcService {
         if let Some(voice) = (self.0.read().unwrap()).get(&voice_id) {
             return self._get_voice_info(voice_id, voice.model_ref());
         }
-        let piper_model = sonata_piper::from_config_path(&config_path, Self::get_ort_environment())?;
+        let piper_model = sonata_piper::from_config_path(&config_path)?;
         log::info!(
             "Loaded Vits voice from: `{}`. Voice ID: {}",
             config_path.display(),
@@ -428,6 +415,15 @@ fn setup_logging() {
         .init();
 }
 
+fn init_ort_environment() -> bool {
+    ort::init()
+        .with_name("sonata")
+        .with_execution_providers([ort::ExecutionProviderDispatch::CPU(Default::default())])
+        .commit()
+        .is_ok()
+}
+
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     setup_logging();
@@ -446,3 +442,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+
