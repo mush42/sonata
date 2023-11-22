@@ -1,5 +1,4 @@
 use ffi_support::{call_with_result, define_string_destructor, ErrorCode, ExternError, FfiStr};
-use once_cell::sync::OnceCell;
 use sonata_core::{AudioSamples, SonataError, SonataModel, SonataResult};
 use sonata_piper::PiperSynthesisConfig;
 use sonata_synth::{AudioOutputConfig, SonataSpeechSynthesizer};
@@ -7,15 +6,16 @@ use std::any::Any;
 use std::ops::Deref;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 
 
 pub type SpeechSynthesisCallback = extern "C" fn(ByteBuffer) -> bool;
-static ORT_ENVIRONMENT: OnceCell<Arc<ort::Environment>> = OnceCell::new();
 
 define_string_destructor!(_internal_libsonataFreeString);
 ffi_support::implement_into_ffi_by_pointer!(SonataVoice);
 ffi_support::define_box_destructor!(SonataVoice, _internal_libsonataUnloadSonataVoice);
+
+static INIT_ORT_ENVIRONMENT: Once = Once::new();
 
 pub mod error_codes {
     pub const FAILED_TO_LOAD_RESOURCE: i32 = 17;
@@ -227,28 +227,27 @@ pub unsafe extern "C" fn libsonataSpeak(
     call_with_result(out_error, move || _synthesize(voice, text, params))
 }
 
-fn get_ort_environment() -> &'static Arc<ort::Environment> {
-    ORT_ENVIRONMENT.get_or_init(|| {
+fn init_ort_environment()  {
+    INIT_ORT_ENVIRONMENT.call_once(|| {
         let execution_providers = [
             #[cfg(target_os = "android")]
-            ort::ExecutionProvider::NNAPI(Default::default()),
+            ort::ExecutionProviderDispatch::NNAPI(Default::default()),
             #[cfg(target_os = "ios")]
-            ort::ExecutionProvider::CoreML(Default::default()),
-            ort::ExecutionProvider::CPU(Default::default()),
+            ort::ExecutionProviderDispatch::CoreML(Default::default()),
+            ort::ExecutionProviderDispatch::CPU(Default::default()),
         ];
-        Arc::new(
-            ort::Environment::builder()
-                .with_name("sonata")
-                .with_execution_providers(execution_providers)
-                .build()
-                .unwrap(),
-        )
-    })
+        ort::init()
+            .with_name("sonata")
+            .with_execution_providers(execution_providers)
+            .commit()
+            .unwrap();
+    });
 }
 
 fn _load_piper_voice(config_path: String) -> SonataFFIResult<SonataVoice> {
+    init_ort_environment();
     let config_path = PathBuf::from(config_path);
-    let piper_model = sonata_piper::from_config_path(&config_path, get_ort_environment())?;
+    let piper_model = sonata_piper::from_config_path(&config_path)?;
     let synth = SonataSpeechSynthesizer::new(piper_model)?;
     Ok(synth.into())
 }

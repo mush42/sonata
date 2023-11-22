@@ -428,6 +428,10 @@ fn init_ort_environment() -> bool {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     setup_logging();
 
+    if init_ort_environment() == false  {
+        log::error!("Could not initialize onnxruntime environment");
+    }
+
     let port = std::env::var("PIPER_GRPC_SERVER_PORT")
         .map(|val| val.parse().unwrap_or(DEFAULT_SONATA_GRPC_SERVER_PORT))
         .unwrap_or(DEFAULT_SONATA_GRPC_SERVER_PORT);
