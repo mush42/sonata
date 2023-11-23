@@ -8,7 +8,7 @@ members = [
     "sonata-grpc",
     "sonata-python",
     "libsonata",
-    "cli",
+    "sonata-cli",
     "espeak-phonemizer",
     "sonic-sys",
     "audio-ops"

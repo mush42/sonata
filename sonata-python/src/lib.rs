@@ -100,7 +100,7 @@ impl WaveSamples {
         PyBytes::new(py, &bytes_vec).into()
     }
     fn save_to_file(&self, filename: &str) -> PySonataResult<()> {
-        Ok(self.0.save_to_file(filename).map_err(SonataError::from)?)
+        Ok(self.0.save_to_file(&PathBuf::from(filename)).map_err(SonataError::from)?)
     }
     #[getter]
     fn sample_rate(&self) -> usize {
@@ -384,7 +384,7 @@ impl Sonata {
         audio_output_config: Option<PyAudioOutputConfig>,
     ) -> PySonataResult<()> {
         self.0
-            .synthesize_to_file(filename, text, audio_output_config.map(|o| o.into()))?;
+            .synthesize_to_file(&PathBuf::from(filename), text, audio_output_config.map(|o| o.into()))?;
         Ok(())
     }
     #[getter]

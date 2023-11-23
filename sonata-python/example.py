@@ -14,7 +14,7 @@ SENTENCES = [
 
 def main():
     os.environ["ORT_DYLIB_PATH"] = "../target/debug/onnxruntime.dll"
-    os.environ["PIPER_ESPEAKNG_DATA_DIRECTORY"] = "../deps/windows/espeak-ng-build"
+    os.environ["SONATA_ESPEAKNG_DATA_DIRECTORY"] = "../deps/windows/espeak-ng-build"
 
     piper_model = PiperModel(MODEL_PATH)
     synth = Sonata.with_piper(piper_model)

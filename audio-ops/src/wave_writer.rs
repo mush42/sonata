@@ -2,7 +2,7 @@ use riff_wave::WaveWriter;
 use std::fmt;
 use std::fs::File;
 use std::io::prelude::*;
-use std::path::PathBuf;
+use std::path::Path;
 
 #[derive(Debug)]
 pub struct WaveWriterError(String);
@@ -49,7 +49,7 @@ where
 }
 
 pub fn write_wave_samples_to_file<'a, I>(
-    filename: PathBuf,
+    filename: &Path,
     samples: I,
     sample_rate: u32,
     num_channels: u32,
@@ -66,11 +66,11 @@ where
         num_channels,
         sample_width,
     )?;
-    match File::create(&filename) {
+    match File::create(filename) {
         Ok(mut file) => match file.write(out.as_slice()) {
             Ok(_) => Ok(()),
             Err(e) => {
-                std::fs::remove_file(PathBuf::from(&filename)).ok();
+                std::fs::remove_file(filename).ok();
                 Err(WaveWriterError(format!(
                     "Failed to write wave bytes to file `{}`. Error: {}",
                     filename.display(),
