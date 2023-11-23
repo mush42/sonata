@@ -18,7 +18,7 @@ const CLAUSE_INTONATION_EXCLAMATION: i32 = 0x00003000;
 const CLAUSE_TYPE_SENTENCE: i32 = 0x00080000;
 /// Name of the environment variable that points to the directory that contains `espeak-ng-data` directory
 /// only needed if `espeak-ng-data` directory is not in the expected location (i.e. eSpeak-ng is not installed system wide)
-const PIPER_ESPEAKNG_DATA_DIRECTORY: &str = "PIPER_ESPEAKNG_DATA_DIRECTORY";
+const SONATA_ESPEAKNG_DATA_DIRECTORY: &str = "SONATA_ESPEAKNG_DATA_DIRECTORY";
 
 #[derive(Debug, Clone)]
 pub struct ESpeakError(pub String);
@@ -34,7 +34,7 @@ impl fmt::Display for ESpeakError {
 static LANG_SWITCH_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"\([^)]*\)").unwrap());
 static STRESS_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"[ˈˌ]").unwrap());
 static ESPEAKNG_INIT: Lazy<ESpeakResult<()>> = Lazy::new(|| {
-    let data_dir = match env::var(PIPER_ESPEAKNG_DATA_DIRECTORY) {
+    let data_dir = match env::var(SONATA_ESPEAKNG_DATA_DIRECTORY) {
         Ok(directory) => PathBuf::from(directory),
         Err(_) => env::current_exe().unwrap().parent().unwrap().to_path_buf(),
     };
@@ -53,7 +53,7 @@ static ESPEAKNG_INIT: Lazy<ESpeakResult<()>> = Lazy::new(|| {
         if es_sample_rate <= 0 {
             Err(ESpeakError(format!(
                 "Failed to initialize eSpeak-ng. Try setting `{}` environment variable to the directory that contains the `espeak-ng-data` directory. Error code: `{}`",
-                PIPER_ESPEAKNG_DATA_DIRECTORY,
+                SONATA_ESPEAKNG_DATA_DIRECTORY,
                 es_sample_rate
             )))
         } else {

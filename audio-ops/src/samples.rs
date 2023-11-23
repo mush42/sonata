@@ -1,4 +1,5 @@
 use crate::hanning_window;
+use std::path::Path;
 
 const PI: f32 = std::f32::consts::PI;
 const I16MIN_F32: f32 = i16::MIN as f32;
@@ -258,9 +259,9 @@ impl Audio {
         Some(infer_ms / audio_duration)
     }
 
-    pub fn save_to_file(&self, filename: &str) -> Result<(), crate::WaveWriterError> {
+    pub fn save_to_file(&self, filename: &Path) -> Result<(), crate::WaveWriterError> {
         crate::write_wave_samples_to_file(
-            filename.into(),
+            filename,
             self.samples.to_i16_vec().iter(),
             self.info.sample_rate as u32,
             self.info.num_channels as u32,

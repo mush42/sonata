@@ -411,7 +411,7 @@ impl SonataGrpc for SonataGrpcService {
 }
 
 fn setup_logging() {
-    env_logger::Builder::from_env(env_logger::Env::default().filter_or("PIPER_GRPC", "info"))
+    env_logger::Builder::from_env(env_logger::Env::default().filter_or("SONATA_GRPC", "info"))
         .init();
 }
 
@@ -432,7 +432,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         log::error!("Could not initialize onnxruntime environment");
     }
 
-    let port = std::env::var("PIPER_GRPC_SERVER_PORT")
+    let port = std::env::var("SONATA_GRPC_SERVER_PORT")
         .map(|val| val.parse().unwrap_or(DEFAULT_SONATA_GRPC_SERVER_PORT))
         .unwrap_or(DEFAULT_SONATA_GRPC_SERVER_PORT);
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);

@@ -7,10 +7,11 @@ use rayon::prelude::*;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::any::Any;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 const RATE_RANGE: (f32, f32) = (0.0f32, 5.0f32);
-const VOLUME_RANGE: (f32, f32) = (0.1f32, 1.9f32);
+const VOLUME_RANGE: (f32, f32) = (0.0f32, 1.0f32);
 const PITCH_RANGE: (f32, f32) = (0.5f32, 1.5f32);
 
 pub static SYNTHESIS_THREAD_POOL: Lazy<ThreadPool> = Lazy::new(|| {
@@ -168,7 +169,7 @@ impl SonataSpeechSynthesizer {
 
     pub fn synthesize_to_file(
         &self,
-        filename: &str,
+        filename: &Path,
         text: String,
         output_config: Option<AudioOutputConfig>,
     ) -> SonataResult<()> {
@@ -188,7 +189,7 @@ impl SonataSpeechSynthesizer {
         }
         let audio = AudioSamples::from(samples);
         Ok(audio_ops::write_wave_samples_to_file(
-            filename.into(),
+            filename,
             audio.to_i16_vec().iter(),
             self.0.audio_output_info()?.sample_rate as u32,
             self.0.audio_output_info()?.num_channels.try_into().unwrap(),
