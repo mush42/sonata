@@ -8,7 +8,7 @@ use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub type SpeechSynthesisCallback = extern "C" fn(LibsonataBuffer) -> bool;
+pub type SpeechSynthesisCallback = extern "C" fn(LibsonataBuffer) -> u8;
 static ORT_ENVIRONMENT: OnceCell<Arc<ort::Environment>> = OnceCell::new();
 
 define_string_destructor!(_internal_libsonataFreeString);
@@ -128,7 +128,7 @@ pub struct SynthesisParams {
     pitch: u8,
     appended_silence_ms: u32,
     callback: SpeechSynthesisCallback,
-    nonblocking: bool,
+    nonblocking: u8,
 }
 
 impl SynthesisParams {
@@ -294,6 +294,26 @@ pub unsafe extern "C" fn libsonataSpeak(
     call_with_result(out_error, move || _synthesize(synth, text_ptr, params))
 }
 
+/// # Safety
+/// Pointer must be non-null and well alighned
+#[no_mangle]
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn libsonataSpeakToFile(
+    voice_ptr: *mut SonataVoice,
+    text_ptr: FfiStr,
+    params: SynthesisParams,
+    out_filename_ptr: FfiStr,
+    out_error: &mut ExternError,
+) -> u8 {
+    let voice = voice_ptr.as_ref().unwrap();
+    let synth = AssertUnwindSafe(Arc::clone(&voice.0));
+    call_with_result(out_error, move || {
+        Ok::<u8, SonataFFIError>(
+            _synthesize_to_file(synth, text_ptr, params, out_filename_ptr).is_ok() as u8,
+        )
+    })
+}
+
 fn get_ort_environment() -> &'static Arc<ort::Environment> {
     ORT_ENVIRONMENT.get_or_init(|| {
         let execution_providers = [
@@ -331,7 +351,7 @@ fn _synthesize(
     let text = text_ptr
         .into_opt_string()
         .ok_or_else(SonataFFIError::invalid_utf8)?;
-    if params.nonblocking {
+    if params.nonblocking != 0 {
         SYNTHESIS_THREAD_POOL.spawn(move || {
             let callback = params.callback;
             if let Err(e) = _do_synthesize(synth, text, params) {
@@ -381,7 +401,7 @@ fn iterate_stream(
         match result {
             Ok(audio) => {
                 let wav_bytes = audio.as_wave_bytes();
-                if !callback(wav_bytes.into()) {
+                if callback(wav_bytes.into()) != 0 {
                     return Ok(());
                 }
             }
@@ -394,5 +414,21 @@ fn iterate_stream(
             }
         };
     }
+    Ok(())
+}
+
+fn _synthesize_to_file(
+    synth: AssertUnwindSafe<Arc<SonataSpeechSynthesizer>>,
+    text_ptr: FfiStr,
+    params: SynthesisParams,
+    out_filename_ptr: FfiStr,
+) -> SonataFFIResult<()> {
+    let text = text_ptr
+        .into_opt_string()
+        .ok_or_else(SonataFFIError::invalid_utf8)?;
+    let out_filename = out_filename_ptr
+        .into_opt_string()
+        .ok_or_else(SonataFFIError::invalid_utf8)?;
+    synth.synthesize_to_file(&out_filename, text, Some(params.as_synth_output_config()))?;
     Ok(())
 }

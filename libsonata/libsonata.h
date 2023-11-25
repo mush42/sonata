@@ -54,7 +54,7 @@ typedef struct AudioInfo {
   uint32_t sample_width;
 } AudioInfo;
 
-typedef bool (*SpeechSynthesisCallback)(struct LibsonataBuffer);
+typedef uint8_t (*SpeechSynthesisCallback)(struct LibsonataBuffer);
 
 typedef struct SynthesisParams {
   enum SynthesisMode mode;
@@ -63,7 +63,7 @@ typedef struct SynthesisParams {
   uint8_t pitch;
   uint32_t appended_silence_ms;
   SpeechSynthesisCallback callback;
-  bool nonblocking;
+  uint8_t nonblocking;
 } SynthesisParams;
 
 void libsonataFreeString(int8_t *string_ptr);
@@ -92,3 +92,9 @@ void libsonataSpeak(struct SonataVoice *voice_ptr,
                     FfiStr text_ptr,
                     struct SynthesisParams params,
                     struct ExternError *out_error);
+
+uint8_t libsonataSpeakToFile(struct SonataVoice *voice_ptr,
+                             FfiStr text_ptr,
+                             struct SynthesisParams params,
+                             FfiStr out_filename_ptr,
+                             struct ExternError *out_error);
