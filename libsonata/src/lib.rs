@@ -8,7 +8,7 @@ use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub type SpeechSynthesisCallback = extern "C" fn(LibsonataBuffer) -> u8;
+pub type SpeechSynthesisCallback = extern "C" fn(SynthesisEvent) -> u8;
 static ORT_ENVIRONMENT: OnceCell<Arc<ort::Environment>> = OnceCell::new();
 
 define_string_destructor!(_internal_libsonataFreeString);
@@ -85,6 +85,14 @@ pub type SonataFFIResult<T> = Result<T, SonataFFIError>;
 
 #[derive(Clone)]
 #[repr(C)]
+pub enum SynthesisEventType {
+    SPEECH = 0,
+    FINISHED = 1,
+    ERROR = 2,
+}
+
+#[derive(Clone)]
+#[repr(C)]
 pub enum SynthesisMode {
     LAZY = 0,
     PARALLEL = 1,
@@ -92,23 +100,37 @@ pub enum SynthesisMode {
 }
 
 #[repr(C)]
-pub struct LibsonataBuffer {
+pub struct SynthesisEvent {
+    event_type: SynthesisEventType,
+    error_ptr: *mut ExternError,
     len: i64, // usize causes issues with JNI
     data: *mut u8,
-    error_ptr: *mut ExternError,
 }
 
-impl From<Vec<u8>> for LibsonataBuffer {
-    fn from(other: Vec<u8>) -> Self {
-        let mut buf = other.into_boxed_slice();
+impl SynthesisEvent {
+    fn with_speech(speech: Vec<u8>) -> Self {
+        let mut buf = speech.into_boxed_slice();
         let data = buf.as_mut_ptr();
         let len = buf.len();
         std::mem::forget(buf);
         Self {
+            event_type: SynthesisEventType::SPEECH,
+            error_ptr: std::ptr::null_mut(),
             len: len as i64,
             data,
-            error_ptr: std::ptr::null_mut(),
         }
+    }
+    fn with_error(error: impl Into<ExternError>) -> Self {
+        let mut event = Self::with_speech(Vec::with_capacity(0));
+        event.event_type = SynthesisEventType::ERROR;
+        event.error_ptr = Box::into_raw(Box::new(error.into()));
+        event
+    }
+    fn with_finished() -> Self {
+        let mut event = Self::with_speech(Vec::with_capacity(0));
+        event.event_type = SynthesisEventType::FINISHED;
+        event.error_ptr = std::ptr::null_mut();
+        event
     }
 }
 
@@ -181,12 +203,12 @@ pub unsafe extern "C" fn libsonataFreePiperSynthConfig(synth_config: *mut PiperS
 
 #[no_mangle]
 #[allow(non_snake_case)]
-pub unsafe extern "C" fn libsonataFreeLibsonataBuffer(buf: LibsonataBuffer) {
+pub unsafe extern "C" fn libsonataFreeSynthesisEvent(event: SynthesisEvent) {
     ffi_support::abort_on_panic::with_abort_on_panic(|| {
-        if !buf.error_ptr.is_null() {
-            drop(Box::from_raw(buf.error_ptr));
+        if !event.error_ptr.is_null() {
+            drop(Box::from_raw(event.error_ptr));
         }
-        let s = std::slice::from_raw_parts_mut(buf.data, buf.len as usize);
+        let s = std::slice::from_raw_parts_mut(event.data, event.len as usize);
         drop(Box::from_raw(s as *mut [u8]));
     });
 }
@@ -355,9 +377,8 @@ fn _synthesize(
         SYNTHESIS_THREAD_POOL.spawn(move || {
             let callback = params.callback;
             if let Err(e) = _do_synthesize(synth, text, params) {
-                let mut buf: LibsonataBuffer = Vec::<u8>::with_capacity(0).into();
-                buf.error_ptr = Box::into_raw(Box::new(e.into()));
-                callback(buf);
+                let event = SynthesisEvent::with_error(e);
+                callback(event);
             }
         });
     } else {
@@ -401,19 +422,19 @@ fn iterate_stream(
         match result {
             Ok(audio) => {
                 let wav_bytes = audio.as_wave_bytes();
-                if callback(wav_bytes.into()) != 0 {
+                let event = SynthesisEvent::with_speech(wav_bytes);
+                if callback(event) != 0 {
                     return Ok(());
                 }
             }
             Err(e) => {
-                let mut buf: LibsonataBuffer = Vec::<u8>::with_capacity(0).into();
-                let error = SonataFFIError::from(e).into();
-                buf.error_ptr = Box::into_raw(Box::new(error));
-                callback(buf);
-                break;
+                let event = SynthesisEvent::with_error(SonataFFIError::from(e));
+                callback(event);
+                return Ok(());
             }
         };
     }
+    callback(SynthesisEvent::with_finished());
     Ok(())
 }
 

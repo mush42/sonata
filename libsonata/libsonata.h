@@ -15,6 +15,12 @@
 
 #define UNKNOWN_ERROR 21
 
+typedef enum SynthesisEventType {
+  SPEECH = 0,
+  FINISHED = 1,
+  ERROR = 2,
+} SynthesisEventType;
+
 typedef enum SynthesisMode {
   LAZY = 0,
   PARALLEL = 1,
@@ -40,11 +46,12 @@ typedef struct ExternError {
   char *message;
 } ExternError;
 
-typedef struct LibsonataBuffer {
+typedef struct SynthesisEvent {
+  enum SynthesisEventType event_type;
+  struct ExternError *error_ptr;
   int64_t len;
   uint8_t *data;
-  struct ExternError *error_ptr;
-} LibsonataBuffer;
+} SynthesisEvent;
 
 typedef const char *FfiStr;
 
@@ -54,7 +61,7 @@ typedef struct AudioInfo {
   uint32_t sample_width;
 } AudioInfo;
 
-typedef uint8_t (*SpeechSynthesisCallback)(struct LibsonataBuffer);
+typedef uint8_t (*SpeechSynthesisCallback)(struct SynthesisEvent);
 
 typedef struct SynthesisParams {
   enum SynthesisMode mode;
@@ -70,7 +77,7 @@ void libsonataFreeString(int8_t *string_ptr);
 
 void libsonataFreePiperSynthConfig(struct PiperSynthConfig *synth_config);
 
-void libsonataFreeLibsonataBuffer(struct LibsonataBuffer buf);
+void libsonataFreeSynthesisEvent(struct SynthesisEvent event);
 
 struct SonataVoice *libsonataLoadVoiceFromConfigPath(FfiStr config_path_ptr,
                                                      struct ExternError *out_error);
