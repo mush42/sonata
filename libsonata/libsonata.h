@@ -11,6 +11,8 @@
 
 #define OPERATION_ERROR 19
 
+#define INVALID_UTF8_SEQUENCE 20
+
 #define UNKNOWN_ERROR 21
 
 typedef enum SynthesisMode {
@@ -21,12 +23,12 @@ typedef enum SynthesisMode {
 
 typedef struct SonataVoice SonataVoice;
 
-typedef struct ByteBuffer {
-  int64_t len;
-  uint8_t *data;
-} ByteBuffer;
-
-typedef const char *FfiStr;
+typedef struct PiperSynthConfig {
+  uint32_t speaker;
+  float length_scale;
+  float noise_scale;
+  float noise_w;
+} PiperSynthConfig;
 
 typedef int32_t ErrorCode;
 #define ErrorCode_SUCCESS 0
@@ -38,20 +40,21 @@ typedef struct ExternError {
   char *message;
 } ExternError;
 
+typedef struct LibsonataBuffer {
+  int64_t len;
+  uint8_t *data;
+  struct ExternError *error_ptr;
+} LibsonataBuffer;
+
+typedef const char *FfiStr;
+
 typedef struct AudioInfo {
   uint32_t sample_rate;
   uint32_t num_channels;
   uint32_t sample_width;
 } AudioInfo;
 
-typedef struct PiperSynthConfig {
-  uint32_t speaker;
-  float length_scale;
-  float noise_scale;
-  float noise_w;
-} PiperSynthConfig;
-
-typedef bool (*SpeechSynthesisCallback)(struct ByteBuffer);
+typedef bool (*SpeechSynthesisCallback)(struct LibsonataBuffer);
 
 typedef struct SynthesisParams {
   enum SynthesisMode mode;
@@ -60,11 +63,14 @@ typedef struct SynthesisParams {
   uint8_t pitch;
   uint32_t appended_silence_ms;
   SpeechSynthesisCallback callback;
+  bool nonblocking;
 } SynthesisParams;
 
 void libsonataFreeString(int8_t *string_ptr);
 
-void libsonataFreeByteBuffer(struct ByteBuffer buf);
+void libsonataFreePiperSynthConfig(struct PiperSynthConfig *synth_config);
+
+void libsonataFreeLibsonataBuffer(struct LibsonataBuffer buf);
 
 struct SonataVoice *libsonataLoadVoiceFromConfigPath(FfiStr config_path_ptr,
                                                      struct ExternError *out_error);
@@ -74,6 +80,9 @@ void libsonataUnloadSonataVoice(struct SonataVoice *voice_ptr);
 void libsonataGetAudioInfo(struct SonataVoice *voice_ptr,
                            struct AudioInfo *audio_info_ptr,
                            struct ExternError *out_error);
+
+struct PiperSynthConfig *libsonataGetPiperDefaultSynthConfig(struct SonataVoice *voice_ptr,
+                                                             struct ExternError *out_error);
 
 void libsonataSetPiperSynthConfig(struct SonataVoice *voice_ptr,
                                   struct PiperSynthConfig synth_config,
