@@ -390,6 +390,7 @@ fn iterate_stream(
                 let error = SonataFFIError::from(e).into();
                 buf.error_ptr = Box::into_raw(Box::new(error));
                 callback(buf);
+                break;
             }
         };
     }
