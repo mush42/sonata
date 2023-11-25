@@ -447,8 +447,7 @@ fn _synthesize_to_file(
         .ok_or_else(SonataFFIError::invalid_utf8)?;
     let out_filename = out_filename_ptr
         .into_opt_string()
-        .ok_or_else(SonataFFIError::invalid_utf8)
-        .map(PathBuf::from)?;
+        .ok_or_else(SonataFFIError::invalid_utf8)?;
     synth.synthesize_to_file(&out_filename, text, Some(params.as_synth_output_config()))?;
     Ok(())
 }
