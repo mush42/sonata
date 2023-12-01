@@ -814,7 +814,7 @@ impl SpeechStreamer {
         chunk_padding: usize,
     ) -> Self {
         let chunk_size = chunk_size.max(MIN_CHUNK_SIZE);
-        let chunk_padding = chunk_padding.min(chunk_size / 2).min(1);
+        let chunk_padding = chunk_padding.min(chunk_size / 2).max(1);
         let num_frames = encoder_outputs.z.shape()[2];
         let num_chunks = (num_frames as f32 / chunk_size as f32).ceil() as usize;
         let one_shot = num_frames <= (chunk_size + (chunk_padding * 3));
@@ -886,7 +886,11 @@ impl SpeechStreamer {
         start_padding: isize,
         end_padding: Option<isize>,
     ) -> SonataResult<AudioSamples> {
-        let audio_idx = ndarray::Slice::new(start_padding, end_padding, 1);
+        let audio_idx = ndarray::Slice::new(
+            start_padding * 256,
+            end_padding.map(|i| i * 256),
+            1
+        );
         let mut audio: AudioSamples = Vec::from(
             audio_view
                 .slice_axis(Axis(2), audio_idx)
