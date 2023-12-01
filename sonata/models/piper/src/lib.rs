@@ -15,7 +15,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-const MIN_CHUNK_SIZE: usize = 100;
+const MIN_CHUNK_SIZE: usize = 25;
 #[allow(dead_code)]
 const FADE_SECS: f64 = 0.002;
 const BOS: char = '^';
