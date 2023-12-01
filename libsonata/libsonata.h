@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#define INVALID_SYNTHESIS_MODE 16
+
 #define FAILED_TO_LOAD_RESOURCE 17
 
 #define PHONEMIZATION_ERROR 18
@@ -15,17 +17,17 @@
 
 #define UNKNOWN_ERROR 21
 
-typedef enum SynthesisEventType {
-  SPEECH = 0,
-  FINISHED = 1,
-  ERROR = 2,
-} SynthesisEventType;
+#define SYNTH_EVENT_SPEECH 0
 
-typedef enum SynthesisMode {
-  LAZY = 0,
-  PARALLEL = 1,
-  REALTIME = 2,
-} SynthesisMode;
+#define SYNTH_EVENT_FINISHED 1
+
+#define SYNTH_EVENT_ERROR 2
+
+#define SYNTH_MODE_LAZY 0
+
+#define SYNTH_MODE_PARALLEL 1
+
+#define SYNTH_MODE_REALTIME 2
 
 typedef struct SonataVoice SonataVoice;
 
@@ -47,7 +49,7 @@ typedef struct ExternError {
 } ExternError;
 
 typedef struct SynthesisEvent {
-  enum SynthesisEventType event_type;
+  int32_t event_type;
   struct ExternError *error_ptr;
   int64_t len;
   uint8_t *data;
@@ -64,7 +66,7 @@ typedef struct AudioInfo {
 typedef uint8_t (*SpeechSynthesisCallback)(struct SynthesisEvent);
 
 typedef struct SynthesisParams {
-  enum SynthesisMode mode;
+  int32_t mode;
   uint8_t rate;
   uint8_t volume;
   uint8_t pitch;

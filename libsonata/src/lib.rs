@@ -17,11 +17,24 @@ ffi_support::define_box_destructor!(PiperSynthConfig, _internal_libsonataFreePip
 static INIT_ORT_ENVIRONMENT: Once = Once::new();
 
 pub mod error_codes {
+    pub const INVALID_SYNTHESIS_MODE: i32 = 16;
     pub const FAILED_TO_LOAD_RESOURCE: i32 = 17;
     pub const PHONEMIZATION_ERROR: i32 = 18;
     pub const OPERATION_ERROR: i32 = 19;
     pub const INVALID_UTF8_SEQUENCE: i32 = 20;
     pub const UNKNOWN_ERROR: i32 = 21;
+}
+
+pub mod synth_event {
+    pub const SYNTH_EVENT_SPEECH: i32 = 0;
+    pub const SYNTH_EVENT_FINISHED: i32 = 1;
+    pub const SYNTH_EVENT_ERROR: i32 = 2;
+}
+
+pub mod synth_mode {
+    pub const SYNTH_MODE_LAZY: i32 = 0;
+    pub const SYNTH_MODE_PARALLEL: i32 = 1;
+    pub const SYNTH_MODE_REALTIME: i32 = 2;
 }
 
 pub struct SonataVoice(AssertUnwindSafe<Arc<SonataSpeechSynthesizer>>);
@@ -60,6 +73,9 @@ impl SonataFFIError {
             "Invalid utf-8 input.".to_string(),
         )
     }
+    fn invalid_synthesis_mode() -> Self {
+        Self(error_codes::INVALID_SYNTHESIS_MODE, "Invalid synthesis mode".to_string())
+    }
 }
 
 impl From<SonataError> for SonataFFIError {
@@ -82,25 +98,9 @@ impl From<SonataFFIError> for ExternError {
 
 pub type SonataFFIResult<T> = Result<T, SonataFFIError>;
 
-#[derive(Clone)]
-#[repr(C)]
-pub enum SynthesisEventType {
-    SPEECH = 0,
-    FINISHED = 1,
-    ERROR = 2,
-}
-
-#[derive(Clone)]
-#[repr(C)]
-pub enum SynthesisMode {
-    LAZY = 0,
-    PARALLEL = 1,
-    REALTIME = 2,
-}
-
 #[repr(C)]
 pub struct SynthesisEvent {
-    event_type: SynthesisEventType,
+    event_type: i32,
     error_ptr: *mut ExternError,
     len: i64, // usize causes issues with JNI
     data: *mut u8,
@@ -113,7 +113,7 @@ impl SynthesisEvent {
         let len = buf.len();
         std::mem::forget(buf);
         Self {
-            event_type: SynthesisEventType::SPEECH,
+            event_type: synth_event::SYNTH_EVENT_SPEECH,
             error_ptr: std::ptr::null_mut(),
             len: len as i64,
             data,
@@ -121,13 +121,13 @@ impl SynthesisEvent {
     }
     fn with_error(error: impl Into<ExternError>) -> Self {
         let mut event = Self::with_speech(Vec::with_capacity(0));
-        event.event_type = SynthesisEventType::ERROR;
+        event.event_type = synth_event::SYNTH_EVENT_ERROR;
         event.error_ptr = Box::into_raw(Box::new(error.into()));
         event
     }
     fn with_finished() -> Self {
         let mut event = Self::with_speech(Vec::with_capacity(0));
-        event.event_type = SynthesisEventType::FINISHED;
+        event.event_type = synth_event::SYNTH_EVENT_FINISHED;
         event.error_ptr = std::ptr::null_mut();
         event
     }
@@ -143,7 +143,7 @@ pub struct AudioInfo {
 #[derive(Clone)]
 #[repr(C)]
 pub struct SynthesisParams {
-    mode: SynthesisMode,
+    mode: i32,
     rate: u8,
     volume: u8,
     pitch: u8,
@@ -392,22 +392,23 @@ fn _do_synthesize(
 ) -> SonataFFIResult<()> {
     let audio_output_config = Some(params.as_synth_output_config());
     match params.mode {
-        SynthesisMode::LAZY => {
+        synth_mode::SYNTH_MODE_LAZY => {
             let stream = synth
                 .synthesize_lazy(text, audio_output_config)?
                 .map(|wr| wr.map(|aud| aud.samples));
             iterate_stream(stream, params.callback)
         }
-        SynthesisMode::PARALLEL => {
+        synth_mode::SYNTH_MODE_PARALLEL => {
             let stream = synth
                 .synthesize_parallel(text, audio_output_config)?
                 .map(|wr| wr.map(|aud| aud.samples));
             iterate_stream(stream, params.callback)
         }
-        SynthesisMode::REALTIME => {
+        synth_mode::SYNTH_MODE_REALTIME => {
             let stream = synth.synthesize_streamed(text, audio_output_config, 72, 3)?;
             iterate_stream(stream, params.callback)
         }
+        _ => Err(SonataFFIError::invalid_synthesis_mode())
     }
 }
 
