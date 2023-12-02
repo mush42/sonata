@@ -29,7 +29,7 @@ features = ["load-dynamic",]
 optional = true
 
 [target.'cfg(target_os="android")'.dependencies.ort]
-version = "2.0.0-alpha.1"
+version = "2.0.0-alpha.2"
 default-features = false
 features = ["load-dynamic", "nnapi"]
 optional = true

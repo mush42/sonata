@@ -2,7 +2,7 @@ use espeak_phonemizer::text_to_phonemes;
 use libtashkeel_base::do_tashkeel;
 use ndarray::Axis;
 use ndarray::{Array, Array1, Array2, ArrayView, Dim, IxDynImpl};
-use ort::{GraphOptimizationLevel, Session, SessionInputs, SessionOutputs, Value};
+use ort::{Session, SessionInputs, SessionOutputs, Value};
 use serde::Deserialize;
 use sonata_core::{
     Audio, AudioInfo, AudioSamples, AudioStreamIterator, Phonemes, SonataAudioResult, SonataError,
@@ -79,9 +79,10 @@ fn create_tashkeel_engine(
 
 fn create_inference_session(model_path: &Path) -> Result<ort::Session, ort::Error> {
     Session::builder()?
-        .with_optimization_level(GraphOptimizationLevel::Disable)?
+        // .with_parallel_execution(true)?
+        // .with_inter_threads(16)?
+        // .with_optimization_level(ort::GraphOptimizationLevel::Level3)?
         .with_memory_pattern(false)?
-        .with_parallel_execution(false)?
         .with_model_from_file(model_path)
 }
 
@@ -296,14 +297,9 @@ pub struct VitsModel {
 }
 
 impl VitsModel {
-    pub fn new(
-        config_path: PathBuf,
-        onnx_path: &Path,
-    ) -> SonataResult<Self> {
+    pub fn new(config_path: PathBuf, onnx_path: &Path) -> SonataResult<Self> {
         match load_model_config(&config_path) {
-            Ok((config, synth_config)) => {
-                Self::from_config(config, synth_config, onnx_path)
-            }
+            Ok((config, synth_config)) => Self::from_config(config, synth_config, onnx_path),
             Err(error) => Err(error),
         }
     }
@@ -347,8 +343,7 @@ impl VitsModel {
         let synth_config = self.synth_config.read().unwrap();
 
         let input_len = input_phonemes.len();
-        let phoneme_inputs =
-            Array2::<i64>::from_shape_vec((1, input_len), input_phonemes).unwrap();
+        let phoneme_inputs = Array2::<i64>::from_shape_vec((1, input_len), input_phonemes).unwrap();
         let input_lengths = Array1::<i64>::from_iter([input_len as i64]);
         let scales = Array1::<f32>::from_iter([
             synth_config.noise_scale,
@@ -544,8 +539,7 @@ impl VitsStreamingModel {
         let synth_config = self.synth_config.read().unwrap();
 
         let input_len = input_phonemes.len();
-        let phoneme_inputs =
-            Array2::<i64>::from_shape_vec((1, input_len), input_phonemes).unwrap();
+        let phoneme_inputs = Array2::<i64>::from_shape_vec((1, input_len), input_phonemes).unwrap();
         let input_lengths = Array1::<i64>::from_iter([input_len as i64]);
 
         let scales = Array1::<f32>::from_iter([
@@ -669,7 +663,6 @@ impl SonataModel for VitsStreamingModel {
         let streamer = Box::new(SpeechStreamer::new(
             Arc::clone(&self.decoder_model),
             encoder_outputs,
-            self.config.audio.sample_rate as usize,
             chunk_size,
             chunk_padding,
         ));
@@ -727,7 +720,7 @@ impl EncoderOutputs {
         Ok(Self { z, y_mask, g })
     }
     fn infer_decoder(&self, session: &ort::Session) -> SonataResult<AudioSamples> {
-        let outputs  = {
+        let outputs = {
             let mut inputs = vec![
                 Value::from_array(self.z.view()).unwrap(),
                 Value::from_array(self.y_mask.view()).unwrap(),
@@ -758,12 +751,7 @@ impl EncoderOutputs {
 struct SpeechStreamer {
     decoder_model: Arc<ort::Session>,
     encoder_outputs: EncoderOutputs,
-    #[allow(dead_code)]
-    sample_rate: f64,
-    chunk_size: isize,
-    chunk_padding: isize,
-    num_frames: isize,
-    chunk_enumerater: std::vec::IntoIter<usize>,
+    mel_chunker: AdaptiveMelChunker,
     one_shot: bool,
 }
 
@@ -771,48 +759,36 @@ impl SpeechStreamer {
     fn new(
         decoder_model: Arc<ort::Session>,
         encoder_outputs: EncoderOutputs,
-        sample_rate: usize,
         chunk_size: usize,
         chunk_padding: usize,
     ) -> Self {
         let chunk_size = chunk_size.max(MIN_CHUNK_SIZE);
         let chunk_padding = chunk_padding.min(chunk_size / 2).max(1);
         let num_frames = encoder_outputs.z.shape()[2];
-        let num_chunks = (num_frames as f32 / chunk_size as f32).ceil() as usize;
+        let mel_chunker = AdaptiveMelChunker::new(
+            num_frames as isize,
+            chunk_size as isize,
+            chunk_padding as isize,
+        );
         let one_shot = num_frames <= (chunk_size + (chunk_padding * 3));
         Self {
             decoder_model,
             encoder_outputs,
-            sample_rate: sample_rate as f64,
-            chunk_size: chunk_size as isize,
-            chunk_padding: chunk_padding as isize,
-            num_frames: num_frames as isize,
-            chunk_enumerater: Vec::from_iter(0..num_chunks).into_iter(),
+            mel_chunker,
             one_shot,
         }
     }
-    fn synthesize_chunk(&mut self, chunk_idx: isize) -> SonataResult<AudioSamples> {
-        let (start_index, start_padding) = if chunk_idx == 0 {
-            (0, 0)
-        } else {
-            let start = (chunk_idx * self.chunk_size) - self.chunk_padding;
-            (start, self.chunk_padding)
-        };
-        let chunk_end = ((chunk_idx + 1) * self.chunk_size) + self.chunk_padding;
-        let (end_index, end_padding) = if chunk_end > self.num_frames {
-            (None, None)
-        } else if (self.num_frames - chunk_end) <= MIN_CHUNK_SIZE as isize {
-            self.consume();
-            (None, None)
-        } else {
-            (Some(chunk_end), Some(-self.chunk_padding))
-        };
-        let index = ndarray::Slice::new(start_index, end_index, 1);
-        {
+    fn synthesize_chunk(
+        &mut self,
+        mel_index: ndarray::Slice,
+        audio_index: ndarray::Slice,
+    ) -> SonataResult<AudioSamples> {
+        let audio = {
+            let session = Arc::clone(&self.decoder_model);
             let z_view = self.encoder_outputs.z.view();
             let y_mask_view = self.encoder_outputs.y_mask.view();
-            let z_chunk = z_view.slice_axis(Axis(2), index);
-            let y_mask_chunk = y_mask_view.slice_axis(Axis(2), index);
+            let z_chunk = z_view.slice_axis(Axis(2), mel_index);
+            let y_mask_chunk = y_mask_view.slice_axis(Axis(2), mel_index);
             let mut inputs = vec![
                 Value::from_array(z_chunk).unwrap(),
                 Value::from_array(y_mask_chunk).unwrap(),
@@ -820,55 +796,39 @@ impl SpeechStreamer {
             if !self.encoder_outputs.g.is_empty() {
                 inputs.push(Value::from_array(self.encoder_outputs.g.view()).unwrap())
             }
-            match self.decoder_model.run(SessionInputs::from(inputs.as_slice())) {
-                Ok(outputs) => match outputs[0].extract_tensor::<f32>() {
-                    Ok(audio_t) => {
-                        self.process_chunk_audio(audio_t.view().view(), start_padding, end_padding)
-                    }
-                    Err(e) => Err(SonataError::OperationError(format!(
+            let outputs = session
+                .run(SessionInputs::from(inputs.as_slice()))
+                .map_err(|e| {
+                    SonataError::OperationError(format!(
                         "Failed to run model inference. Error: {}",
                         e
-                    ))),
-                },
-                Err(e) => Err(SonataError::OperationError(format!(
-                    "Failed to run model inference. Error: {}",
-                    e
-                ))),
-            }
-        }
+                    ))
+                })?;
+            let audio_t = outputs[0].extract_tensor::<f32>().map_err(|e| {
+                SonataError::OperationError(format!("Failed to run model inference. Error: {}", e))
+            })?;
+            self.process_chunk_audio(audio_t.view().view(), audio_index)?
+        };
+        Ok(audio)
     }
     #[inline(always)]
     fn process_chunk_audio(
-        &self,
+        &mut self,
         audio_view: ArrayView<f32, Dim<IxDynImpl>>,
-        start_padding: isize,
-        end_padding: Option<isize>,
+        audio_index: ndarray::Slice,
     ) -> SonataResult<AudioSamples> {
-        let audio_idx = ndarray::Slice::new(
-            start_padding * 256,
-            end_padding.map(|i| i * 256),
-            1
-        );
-        let mut audio: AudioSamples = Vec::from(
-            audio_view
-                .slice_axis(Axis(2), audio_idx)
-                .as_slice()
-                .unwrap(),
-        ).into();
-        const N_SFX_SAMPLES: usize = 128;
-        const CROSSFADE_SAMPLES: usize = 32;
-        if audio.len() >= N_SFX_SAMPLES {
-            let idx = (audio.len() - N_SFX_SAMPLES)..audio.len();
-            audio.take_range(idx);
+        let mut audio_data = audio_view
+            .slice_axis(Axis(2), audio_index)
+            .as_slice()
+            .ok_or_else(|| SonataError::with_message("Invalid model audio output"))?
+            .to_vec();
+        const SUFFIX_LEN: usize = 128;
+        if audio_data.len() > SUFFIX_LEN {
+            Vec::from_iter(audio_data.drain((audio_data.len() - SUFFIX_LEN)..audio_data.len()));
         }
-        if audio.len() >= N_SFX_SAMPLES {
-            audio.take_range(0..N_SFX_SAMPLES);
-        }
-        audio.crossfade(CROSSFADE_SAMPLES);
+        let mut audio: AudioSamples = audio_data.into();
+        audio.crossfade(16);
         Ok(audio)
-    }
-    fn consume(&mut self) {
-        self.chunk_enumerater.find(|_| false);
     }
 }
 
@@ -876,15 +836,69 @@ impl Iterator for SpeechStreamer {
     type Item = SonataResult<AudioSamples>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let chunk_idx = self.chunk_enumerater.next()?;
+        let (mel_index, audio_index) = self.mel_chunker.next()?;
         if self.one_shot {
-            self.consume();
+            self.mel_chunker.consume();
             Some(
                 self.encoder_outputs
                     .infer_decoder(self.decoder_model.as_ref()),
             )
         } else {
-            Some(self.synthesize_chunk(chunk_idx as isize))
+            Some(self.synthesize_chunk(mel_index, audio_index))
         }
+    }
+}
+
+struct AdaptiveMelChunker {
+    num_frames: isize,
+    chunk_size: f32,
+    chunk_padding: isize,
+    last_end_index: Option<isize>,
+    chunk_size_factor: f32,
+}
+
+impl AdaptiveMelChunker {
+    fn new(num_frames: isize, chunk_size: isize, chunk_padding: isize) -> Self {
+        Self {
+            num_frames,
+            chunk_size: chunk_size as f32,
+            chunk_padding,
+            last_end_index: Some(0),
+            chunk_size_factor: 1.0,
+        }
+    }
+    fn consume(&mut self) {
+        self.last_end_index = None;
+    }
+}
+
+impl Iterator for AdaptiveMelChunker {
+    type Item = (ndarray::Slice, ndarray::Slice);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let last_index = self.last_end_index?;
+        let chunk_size = (self.chunk_size * self.chunk_size_factor.max(10.0)) as isize;
+        self.chunk_size_factor += 1.5;
+        let (start_index, end_index): (isize, Option<isize>);
+        let (start_padding, end_padding): (isize, Option<isize>);
+        if last_index == 0 {
+            start_index = 0;
+            start_padding = 0;
+        } else {
+            start_index = last_index - self.chunk_padding;
+            start_padding = self.chunk_padding;
+        }
+        let chunk_end = last_index + chunk_size + self.chunk_padding;
+        if chunk_end >= self.num_frames {
+            end_index = None;
+            end_padding = None;
+        } else {
+            end_index = Some(chunk_end);
+            end_padding = Some(-self.chunk_padding)
+        }
+        self.last_end_index = end_index;
+        let chunk_index = ndarray::Slice::new(start_index, end_index, 1);
+        let audio_index = ndarray::Slice::new(start_padding * 256, end_padding.map(|i| i * 256), 1);
+        Some((chunk_index, audio_index))
     }
 }

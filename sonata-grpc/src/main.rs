@@ -380,7 +380,7 @@ impl SonataGrpc for SonataGrpcService {
         let synth = Arc::clone(&voice.0);
         let (tx, rx) = mpsc::channel(512);
         tokio::task::spawn_blocking(move || {
-            let stream_result = synth.synthesize_streamed(req.text, output_config, 45, 3);
+            let stream_result = synth.synthesize_streamed(req.text, output_config, 72, 3);
             let realtime_speech_stream = match stream_result {
                 Ok(stream) => stream,
                 Err(e) => {
@@ -428,7 +428,7 @@ fn init_ort_environment() -> bool {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     setup_logging();
 
-    if init_ort_environment() == false  {
+    if !init_ort_environment()  {
         log::error!("Could not initialize onnxruntime environment");
     }
 

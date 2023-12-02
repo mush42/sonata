@@ -24,6 +24,6 @@ version = "4.3.2"
 features = ["derive",]
 
 [dependencies.ort]
-version = "2.0.0-alpha.1"
+version = "2.0.0-alpha.2"
 default-features = false
 features = ["load-dynamic",]

@@ -23,6 +23,11 @@ pub enum SonataError {
     OperationError(String),
 }
 
+impl SonataError {
+    pub fn with_message(message: impl Into<String>) -> Self {
+        Self::OperationError(message.into())
+    }
+}
 impl Error for SonataError {}
 
 impl fmt::Display for SonataError {

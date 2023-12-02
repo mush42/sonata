@@ -17,7 +17,7 @@ tonic = "0.10.2"
 xxhash-rust = { version = "0.8.7", features = ["xxh3"] }
 
 [dependencies.ort]
-version = "2.0.0-alpha.1"
+version = "2.0.0-alpha.2"
 default-features = false
 features = ["load-dynamic",]
 
