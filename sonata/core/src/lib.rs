@@ -124,12 +124,9 @@ pub trait SonataModel {
         #[allow(unused_variables)] chunk_size: usize,
         #[allow(unused_variables)] chunk_padding: usize,
     ) -> SonataResult<AudioStreamIterator> {
-        Ok(Box::new(
-            [Err(SonataError::OperationError(
+        Err(SonataError::OperationError(
                 "Streaming synthesis is not supported for this model".to_string(),
-            ))]
-            .into_iter(),
-        ))
+            ))
     }
 }
 
