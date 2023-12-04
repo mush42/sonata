@@ -769,7 +769,7 @@ impl SpeechStreamer {
             chunk_size as isize,
             chunk_padding as isize,
         );
-        let one_shot = num_frames <= (chunk_size + (chunk_padding * 3));
+        let one_shot = num_frames <= (chunk_size * 2 + (chunk_padding * 2));
         Self {
             decoder_model,
             encoder_outputs,
@@ -822,7 +822,7 @@ impl SpeechStreamer {
             .ok_or_else(|| SonataError::with_message("Invalid model audio output"))?
             .to_vec()
             .into();
-        audio.crossfade(64);
+        audio.crossfade(48);
         Ok(audio)
     }
 }
