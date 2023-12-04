@@ -15,7 +15,8 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-const MIN_CHUNK_SIZE: usize = 25;
+const MIN_CHUNK_SIZE: isize = 40;
+const MAX_CHUNK_SIZE: usize = 360;
 #[allow(dead_code)]
 const FADE_SECS: f64 = 0.002;
 const BOS: char = '^';
@@ -762,8 +763,6 @@ impl SpeechStreamer {
         chunk_size: usize,
         chunk_padding: usize,
     ) -> Self {
-        let chunk_size = chunk_size.max(MIN_CHUNK_SIZE);
-        let chunk_padding = chunk_padding.min(chunk_size / 2).max(1);
         let num_frames = encoder_outputs.z.shape()[2];
         let mel_chunker = AdaptiveMelChunker::new(
             num_frames as isize,
@@ -817,17 +816,13 @@ impl SpeechStreamer {
         audio_view: ArrayView<f32, Dim<IxDynImpl>>,
         audio_index: ndarray::Slice,
     ) -> SonataResult<AudioSamples> {
-        let mut audio_data = audio_view
+        let mut audio: AudioSamples = audio_view
             .slice_axis(Axis(2), audio_index)
             .as_slice()
             .ok_or_else(|| SonataError::with_message("Invalid model audio output"))?
-            .to_vec();
-        const SUFFIX_LEN: usize = 128;
-        if audio_data.len() > SUFFIX_LEN {
-            Vec::from_iter(audio_data.drain((audio_data.len() - SUFFIX_LEN)..audio_data.len()));
-        }
-        let mut audio: AudioSamples = audio_data.into();
-        audio.crossfade(16);
+            .to_vec()
+            .into();
+        audio.crossfade(64);
         Ok(audio)
     }
 }
@@ -851,20 +846,21 @@ impl Iterator for SpeechStreamer {
 
 struct AdaptiveMelChunker {
     num_frames: isize,
-    chunk_size: f32,
+    chunk_size: usize,
     chunk_padding: isize,
     last_end_index: Option<isize>,
-    chunk_size_factor: f32,
+    step: usize
 }
 
 impl AdaptiveMelChunker {
     fn new(num_frames: isize, chunk_size: isize, chunk_padding: isize) -> Self {
+        // println!("Starting chunk_size: {}", chunk_size);
         Self {
             num_frames,
-            chunk_size: chunk_size as f32,
+            chunk_size: chunk_size as usize,
             chunk_padding,
             last_end_index: Some(0),
-            chunk_size_factor: 1.0,
+            step: 1
         }
     }
     fn consume(&mut self) {
@@ -877,8 +873,8 @@ impl Iterator for AdaptiveMelChunker {
 
     fn next(&mut self) -> Option<Self::Item> {
         let last_index = self.last_end_index?;
-        let chunk_size = (self.chunk_size * self.chunk_size_factor.max(10.0)) as isize;
-        self.chunk_size_factor += 1.5;
+        let chunk_size = (self.chunk_size * self.step).min(MAX_CHUNK_SIZE);
+        // println!("Inner chunk_size: {}", chunk_size);
         let (start_index, end_index): (isize, Option<isize>);
         let (start_padding, end_padding): (isize, Option<isize>);
         if last_index == 0 {
@@ -888,14 +884,16 @@ impl Iterator for AdaptiveMelChunker {
             start_index = last_index - self.chunk_padding;
             start_padding = self.chunk_padding;
         }
-        let chunk_end = last_index + chunk_size + self.chunk_padding;
-        if chunk_end >= self.num_frames {
+        let chunk_end = last_index + chunk_size as isize + self.chunk_padding;
+        let remaining_frames = self.num_frames - chunk_end;
+        if remaining_frames <= MIN_CHUNK_SIZE {
             end_index = None;
             end_padding = None;
         } else {
             end_index = Some(chunk_end);
             end_padding = Some(-self.chunk_padding)
         }
+        self.step += 1;
         self.last_end_index = end_index;
         let chunk_index = ndarray::Slice::new(start_index, end_index, 1);
         let audio_index = ndarray::Slice::new(start_padding * 256, end_padding.map(|i| i * 256), 1);

@@ -345,7 +345,15 @@ impl RealtimeSpeechStream {
         let phonemes = provider.get_phonemes()?.into_iter();
         let (tx, rx) = unbounded();
         SYNTHESIS_THREAD_POOL.spawn(move || {
+            let mut chunk_size = chunk_size;
+            let chunk_factor = 1;
+            let mut num_processed_chunks = 0;
             for ph_sent in phonemes {
+                chunk_size = if num_processed_chunks != 0 {
+                    chunk_size  * chunk_factor * num_processed_chunks
+                } else {
+                    chunk_size
+                };
                 match provider
                     .model
                     .stream_synthesis(ph_sent, chunk_size, chunk_padding)
@@ -358,9 +366,10 @@ impl RealtimeSpeechStream {
                             sample_rate,
                             num_channels,
                         );
-                        if send_result.is_err() {
-                            return;
-                        }
+                        match send_result {
+                            Ok(num_chunks) => num_processed_chunks += num_chunks,
+                            Err(_) => return
+                        };
                     }
                     Err(e) => {
                         tx.send(Err(e)).ok();
@@ -378,7 +387,8 @@ impl RealtimeSpeechStream {
         audio_output_config: Option<&AudioOutputConfig>,
         sample_rate: usize,
         num_channels: usize,
-    ) -> Result<(), SendError> {
+    ) -> Result<usize, SendError> {
+        let mut num_chunks = 0;
         if let Some(output_config) = audio_output_config {
             for result in stream {
                 match result {
@@ -388,6 +398,7 @@ impl RealtimeSpeechStream {
                             sample_rate,
                             num_channels,
                         ))?;
+                        num_chunks += 1;
                     }
                     Err(e) => {
                         tx.send(Err(e))?;
@@ -399,12 +410,13 @@ impl RealtimeSpeechStream {
                     output_config.generate_silence(silence_ms as usize, sample_rate, num_channels);
                 tx.send(silence_result)?;
             }
-            Ok(())
+            Ok(num_chunks)
         } else {
             for result in stream {
                 tx.send(result)?;
+                num_chunks += 1;
             }
-            Ok(())
+            Ok(num_chunks)
         }
     }
 }
