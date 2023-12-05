@@ -1,7 +1,7 @@
 mod utils;
 pub use sonata_core::*;
 
-use kanal::{unbounded, Receiver, SendError, Sender};
+use flume::{Receiver, SendError, Sender};
 use once_cell::sync::Lazy;
 use rayon::prelude::*;
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -343,7 +343,7 @@ impl RealtimeSpeechStream {
         num_channels: usize,
     ) -> SonataResult<Self> {
         let phonemes = provider.get_phonemes()?.into_iter();
-        let (tx, rx) = unbounded();
+        let (tx, rx) = flume::unbounded();
         SYNTHESIS_THREAD_POOL.spawn(move || {
             let mut chunk_size = chunk_size;
             let chunk_factor = 1;
@@ -387,7 +387,7 @@ impl RealtimeSpeechStream {
         audio_output_config: Option<&AudioOutputConfig>,
         sample_rate: usize,
         num_channels: usize,
-    ) -> Result<usize, SendError> {
+    ) -> Result<usize, SendError<SonataResult<AudioSamples>>> {
         let mut num_chunks = 0;
         if let Some(output_config) = audio_output_config {
             for result in stream {
