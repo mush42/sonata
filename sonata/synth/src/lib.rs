@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-const RATE_RANGE: (f32, f32) = (0.0f32, 5.0f32);
+const RATE_RANGE: (f32, f32) = (0.5f32, 5.5f32);
 const VOLUME_RANGE: (f32, f32) = (0.0f32, 1.0f32);
 const PITCH_RANGE: (f32, f32) = (0.5f32, 1.5f32);
 

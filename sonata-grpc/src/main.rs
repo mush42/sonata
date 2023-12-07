@@ -380,7 +380,7 @@ impl SonataGrpc for SonataGrpcService {
         let synth = Arc::clone(&voice.0);
         let (tx, rx) = mpsc::channel(512);
         tokio::task::spawn_blocking(move || {
-            let stream_result = synth.synthesize_streamed(req.text, output_config, 86, 2);
+            let stream_result = synth.synthesize_streamed(req.text, output_config, 55, 3);
             let realtime_speech_stream = match stream_result {
                 Ok(stream) => stream,
                 Err(e) => {
