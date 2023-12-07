@@ -15,10 +15,8 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-const MIN_CHUNK_SIZE: isize = 40;
-const MAX_CHUNK_SIZE: usize = 750;
-#[allow(dead_code)]
-const FADE_SECS: f64 = 0.002;
+const MIN_CHUNK_SIZE: isize = 36;
+const MAX_CHUNK_SIZE: usize = 1024;
 const BOS: char = '^';
 const EOS: char = '$';
 const PAD: char = '_';
