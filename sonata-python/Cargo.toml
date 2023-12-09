@@ -4,7 +4,7 @@ version = "0.2.0"
 edition = "2021"
 
 [lib]
-name = "sonata"
+name = "pysonata"
 crate-type = ["cdylib"]
 
 [dependencies]

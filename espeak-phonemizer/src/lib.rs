@@ -112,7 +112,7 @@ pub fn _text_to_phonemes(
     let terminator_ptr: *mut ffi::c_int = &mut terminator;
     while !text_c_char.is_null() {
         let ph_str = unsafe {
-            let res = espeakng::espeak_TextToPhonemes2(
+            let res = espeakng::espeak_TextToPhonemesWithTerminator(
                 text_c_char_ptr,
                 espeakng::espeakCHARS_UTF8.try_into().unwrap(),
                 phoneme_mode,

@@ -402,7 +402,7 @@ impl Sonata {
 
 /// A fast, local neural text-to-speech engine
 #[pymodule]
-fn sonata(_py: Python, m: &PyModule) -> PyResult<()> {
+fn pysonata(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add("SonataException", _py.get_type::<SonataException>())?;
     m.add_class::<Sonata>()?;
     m.add_class::<PiperModel>()?;

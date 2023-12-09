@@ -44,7 +44,7 @@ extern "C" {
 }
 
 extern "C" {
-    pub fn espeak_TextToPhonemes2(
+    pub fn espeak_TextToPhonemesWithTerminator(
         textptr: *mut *const ::std::os::raw::c_char,
         textmode: ::std::os::raw::c_int,
         phonememode: ::std::os::raw::c_int,
