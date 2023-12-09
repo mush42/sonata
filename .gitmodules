@@ -4,3 +4,6 @@
 [submodule "deps/libtashkeel"]
 	path = deps/libtashkeel
 	url = https://github.com/mush42/libtashkeel
+[submodule "deps/espeak-ng"]
+	path = deps/espeak-ng
+	url = https://github.com/rhasspy/espeak-ng
