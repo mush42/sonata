@@ -7,6 +7,10 @@ edition = "2021"
 name = "pysonata"
 crate-type = ["cdylib"]
 
+[features]
+default = []
+ort-dylib = ["ort/load-dynamic"]
+
 [dependencies]
 sonata-core = { path = "../sonata/core" }
 sonata-synth = { path = "../sonata/synth" }
@@ -18,5 +22,6 @@ features = ["extension-module", "abi3-py37"]
 
 [dependencies.ort]
 version = "2.0.0-alpha.2"
-default-features = false
-features = ["load-dynamic",]
+
+[build-dependencies]
+fs_extra = "1.3.0"

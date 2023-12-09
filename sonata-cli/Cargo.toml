@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [features]
 cuda = ["ort/cuda"]
+ort-dylib = ["ort/load-dynamic"]
 
 [dependencies]
 sonata-synth = { version = "0.2.0", path = "../sonata/synth" }
@@ -25,5 +26,3 @@ features = ["derive",]
 
 [dependencies.ort]
 version = "2.0.0-alpha.2"
-default-features = false
-features = ["load-dynamic",]
