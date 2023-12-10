@@ -10,6 +10,7 @@ members = [
     "libsonata",
     "sonata-cli",
     "espeak-phonemizer",
+    "libtorch-inference",
     "sonic-sys",
     "audio-ops"
 ]
