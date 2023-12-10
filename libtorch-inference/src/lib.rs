@@ -30,8 +30,8 @@ impl LibtorchInferenceSession {
         model.f_set_eval()?;
         Ok(Self(model))
     }
-    pub fn run(&self, inputs: Tensor) -> LibtorchResult<LibtorchOutput> {
-        let output = self.0.forward_ts(&[inputs])?;
+    pub fn run(&self, inputs: &[Tensor]) -> LibtorchResult<LibtorchOutput> {
+        let output = self.0.forward_ts(inputs)?;
         Ok(output.into())
     }
 }
@@ -75,7 +75,7 @@ mod test {
     #[test]
     fn test_basic() -> LibtorchResult<()> {
         let input = Tensor::rand([32], (Kind::Float, Device::Cpu));
-        let output = INFERENCE_SESSION.run(input)?;
+        let output = INFERENCE_SESSION.run(&[input])?;
         let _array = output.into_array()?;
         Ok(())
     }
@@ -83,7 +83,7 @@ mod test {
     fn test_with_ndarray_input() -> LibtorchResult<()> {
         let input = ndarray::Array1::<f32>::ones(32);
         let input_t: Tensor = input.try_into().unwrap();
-        let output = INFERENCE_SESSION.run(input_t)?;
+        let output = INFERENCE_SESSION.run(&[input_t])?;
         let _array = output.into_array()?;
         Ok(())
     }
