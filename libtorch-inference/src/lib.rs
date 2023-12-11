@@ -1,6 +1,6 @@
 use ndarray::{ArrayD, IxDyn};
 use std::path::Path;
-use tch::{CModule, Kind, TchError, Tensor};
+use tch::{CModule, TchError, Tensor};
 
 pub type LibtorchResult<T> = Result<T, LibtorchError>;
 
@@ -38,12 +38,14 @@ impl LibtorchInferenceSession {
 
 pub struct LibtorchOutput(Tensor);
 
-impl LibtorchOutput {
-    pub fn into_array(self) -> LibtorchResult<ArrayD<f32>> {
-        let t = self.0;
+impl<T: tch::kind::Element> TryFrom<LibtorchOutput> for ArrayD<T> {
+    type Error = LibtorchError;
+
+    fn try_from(output: LibtorchOutput) ->  LibtorchResult<Self> {
+        let t = output.0;
         let num_elem = t.numel();
-        let mut vec = vec![0.; num_elem];
-        t.f_to_kind(Kind::Float)?.f_copy_data(&mut vec, num_elem)?;
+        let mut vec = vec![T::ZERO; num_elem];
+        t.f_to_kind(T::KIND)?.f_copy_data(&mut vec, num_elem)?;
         let shape: Vec<usize> = t.size().iter().map(|s| *s as usize).collect();
         let array = ArrayD::from_shape_vec(IxDyn(&shape), vec).map_err(|_| {
             LibtorchError::OperationError(
@@ -76,7 +78,7 @@ mod test {
     fn test_basic() -> LibtorchResult<()> {
         let input = Tensor::rand([32], (Kind::Float, Device::Cpu));
         let output = INFERENCE_SESSION.run(&[input])?;
-        let _array = output.into_array()?;
+        let _array: ArrayD<f32> = output.try_into()?;
         Ok(())
     }
     #[test]
@@ -84,7 +86,7 @@ mod test {
         let input = ndarray::Array1::<f32>::ones(32);
         let input_t: Tensor = input.try_into().unwrap();
         let output = INFERENCE_SESSION.run(&[input_t])?;
-        let _array = output.into_array()?;
+        let _array: ArrayD<f32> = output.try_into()?;
         Ok(())
     }
 }
