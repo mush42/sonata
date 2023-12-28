@@ -24,16 +24,16 @@ path = "../sonata/models/piper"
 optional = true
 
 [dependencies.ort]
-version = "2.0.0-alpha.2"
+version = "2.0.0-alpha.3"
 optional = true
 
 [target.'cfg(target_os="android")'.dependencies.ort]
-version = "2.0.0-alpha.2"
+version = "2.0.0-alpha.3"
 features = ["nnapi"]
 optional = true
 
 [target.'cfg(target_os="ios")'.dependencies.ort]
-version = "2.0.0-alpha.1"
+version = "2.0.0-alpha.3"
 features = ["coreml"]
 optional = true
 
