@@ -15,7 +15,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-const MIN_CHUNK_SIZE: isize = 36;
+const MIN_CHUNK_SIZE: isize = 20;
 const MAX_CHUNK_SIZE: usize = 1024;
 const BOS: char = '^';
 const EOS: char = '$';
@@ -780,6 +780,7 @@ impl SpeechStreamer {
         mel_index: ndarray::Slice,
         audio_index: ndarray::Slice,
     ) -> SonataResult<AudioSamples> {
+        // println!("Mel index: {:?}\nAudio Index: {:?}", mel_index, audio_index);
         let audio = {
             let session = Arc::clone(&self.decoder_model);
             let z_view = self.encoder_outputs.z.view();
@@ -820,7 +821,7 @@ impl SpeechStreamer {
             .ok_or_else(|| SonataError::with_message("Invalid model audio output"))?
             .to_vec()
             .into();
-        audio.crossfade(48);
+        audio.crossfade(42);
         Ok(audio)
     }
 }
@@ -852,7 +853,6 @@ struct AdaptiveMelChunker {
 
 impl AdaptiveMelChunker {
     fn new(num_frames: isize, chunk_size: isize, chunk_padding: isize) -> Self {
-        // println!("Starting chunk_size: {}", chunk_size);
         Self {
             num_frames,
             chunk_size: chunk_size as usize,
@@ -872,14 +872,13 @@ impl Iterator for AdaptiveMelChunker {
     fn next(&mut self) -> Option<Self::Item> {
         let last_index = self.last_end_index?;
         let chunk_size = (self.chunk_size * self.step).min(MAX_CHUNK_SIZE);
-        // println!("Inner chunk_size: {}", chunk_size);
         let (start_index, end_index): (isize, Option<isize>);
         let (start_padding, end_padding): (isize, Option<isize>);
         if last_index == 0 {
             start_index = 0;
             start_padding = 0;
         } else {
-            start_index = last_index - self.chunk_padding;
+            start_index = last_index - (self.chunk_padding * 2);
             start_padding = self.chunk_padding;
         }
         let chunk_end = last_index + chunk_size as isize + self.chunk_padding;

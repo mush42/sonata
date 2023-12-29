@@ -21,7 +21,7 @@ tonic = "0.10.2"
 xxhash-rust = { version = "0.8.7", features = ["xxh3"] }
 
 [dependencies.ort]
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.4"
 
 [build-dependencies]
 tonic-build = "0.10.2"

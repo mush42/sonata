@@ -1264,9 +1264,9 @@ checksum = "3fdb12b2476b595f9358c5161aa467c2438859caa136dec86c26fdd2efe17b92"
 
 [[package]]
 name = "ort"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52145dce476b659056518fc467545e1e6d48bf85ab514a5d936ff3c04852bc99"
+checksum = "8bdb7c4723330322ea09d508e730950e4fcf2116f2dc8394ca0f00dbb77e9e11"
 dependencies = [
  "half",
  "libloading",
@@ -1278,9 +1278,9 @@ dependencies = [
 
 [[package]]
 name = "ort-sys"
-version = "2.0.0-alpha.3"
+version = "2.0.0-alpha.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "846ab4ca6873d26ac40f4bdfa8375e5e4547117693b06de5b7903e0c7471d1b7"
+checksum = "91fd810ca950630046c7cd2d2ad67ab08404195cc0c566501a64b1c0f0c71ffc"
 dependencies = [
  "flate2",
  "sha2",
