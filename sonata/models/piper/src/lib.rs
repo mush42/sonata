@@ -15,7 +15,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-const MIN_CHUNK_SIZE: isize = 20;
+const MIN_CHUNK_SIZE: isize = 44;
 const MAX_CHUNK_SIZE: usize = 1024;
 const BOS: char = '^';
 const EOS: char = '$';
