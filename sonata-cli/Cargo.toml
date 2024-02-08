@@ -14,7 +14,7 @@ ort-dylib = ["ort/load-dynamic"]
 [dependencies]
 sonata-synth = { version = "0.2.0", path = "../sonata/synth" }
 sonata-piper = { version = "0.2.0", path = "../sonata/models/piper" }
-anyhow = "1.0.72"
+anyhow = "1.0.79"
 env_logger = "0.10.0"
 log = "0.4.18"
 serde = { version = "1.0.160", features = ["derive"] }

@@ -182,6 +182,7 @@ trait VitsModelCommons {
             .language
             .as_ref()
             .map(|lang| lang.code.clone())
+            .or_else(|| Some(self.get_config().espeak.voice.clone()))
     }
     fn get_properties(&self) -> HashMap<String, String> {
         HashMap::from([(
@@ -267,7 +268,7 @@ trait VitsModelCommons {
         Ok(phonemes.into())
     }
     fn diacritize_text(&self, text: &str) -> SonataResult<String> {
-        let diacritized_text = match do_tashkeel(self.get_tashkeel_engine().unwrap(), text, None) {
+        let diacritized_text = match do_tashkeel(self.get_tashkeel_engine().unwrap(), text, None, false) {
             Ok(d_text) => d_text,
             Err(msg) => {
                 return Err(SonataError::OperationError(format!(
