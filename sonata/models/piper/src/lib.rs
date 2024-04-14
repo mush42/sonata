@@ -673,6 +673,7 @@ impl SonataModel for VitsStreamingModel {
 struct EncoderOutputs {
     z: Array<f32, Dim<IxDynImpl>>,
     y_mask: Array<f32, Dim<IxDynImpl>>,
+    p_duration: Option<Array<f32, Dim<IxDynImpl>>>,
     g: Array<f32, Dim<IxDynImpl>>,
 }
 
@@ -680,7 +681,7 @@ impl EncoderOutputs {
     #[inline(always)]
     fn from_values(values: SessionOutputs) -> SonataResult<Self> {
         let z = {
-            let z_t = match values[0].extract_tensor::<f32>() {
+            let z_t = match values["z"].extract_tensor::<f32>() {
                 Ok(out) => out,
                 Err(e) => {
                     return Err(SonataError::OperationError(format!(
@@ -692,7 +693,7 @@ impl EncoderOutputs {
             z_t.view().clone().into_owned()
         };
         let y_mask = {
-            let y_mask_t = match values[1].extract_tensor::<f32>() {
+            let y_mask_t = match values["y_mask"].extract_tensor::<f32>() {
                 Ok(out) => out,
                 Err(e) => {
                     return Err(SonataError::OperationError(format!(
@@ -703,8 +704,22 @@ impl EncoderOutputs {
             };
             y_mask_t.view().clone().into_owned()
         };
-        let g = if values.len() == 3 {
-            let g_t = match values[2].extract_tensor::<f32>() {
+        let p_duration = if values.contains_key("p_duration") {
+            let p_duration_t = match values["p_duration"].extract_tensor::<f32>() {
+                Ok(out) => out,
+                Err(e) => {
+                    return Err(SonataError::OperationError(format!(
+                        "Failed to run model inference. Error: {}",
+                        e
+                    )))
+                }
+            };
+            Some(p_duration_t.view().clone().into_owned())
+        } else {
+            None
+        };
+        let g = if values.contains_key("g") {
+            let g_t = match values["g"].extract_tensor::<f32>() {
                 Ok(out) => out,
                 Err(e) => {
                     return Err(SonataError::OperationError(format!(
@@ -717,7 +732,7 @@ impl EncoderOutputs {
         } else {
             Array1::<f32>::from_iter([]).into_dyn()
         };
-        Ok(Self { z, y_mask, g })
+        Ok(Self { z, y_mask, p_duration, g })
     }
     fn infer_decoder(&self, session: &ort::Session) -> SonataResult<AudioSamples> {
         let outputs = {
