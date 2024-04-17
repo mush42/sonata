@@ -81,8 +81,8 @@ fn create_inference_session(model_path: &Path) -> Result<ort::Session, ort::Erro
         // .with_parallel_execution(true)?
         // .with_inter_threads(16)?
         // .with_optimization_level(ort::GraphOptimizationLevel::Level3)?
-        .with_memory_pattern(false)?
-        .with_model_from_file(model_path)
+        // .with_memory_pattern(false)?
+        .commit_from_file(model_path)
 }
 
 pub fn from_config_path(config_path: &Path) -> SonataResult<Arc<dyn SonataModel + Send + Sync>> {
@@ -361,12 +361,20 @@ impl VitsModel {
         let timer = std::time::Instant::now();
         let outputs = {
             let mut inputs = vec![
-                Value::from_array(phoneme_inputs).unwrap(),
-                Value::from_array(input_lengths).unwrap(),
-                Value::from_array(scales).unwrap(),
+                ort::SessionInputValue::from(
+                    Value::from_array(phoneme_inputs).unwrap()
+                ),
+                ort::SessionInputValue::from(
+                    Value::from_array(input_lengths).unwrap()
+                ),
+                ort::SessionInputValue::from(
+                    Value::from_array(scales).unwrap()
+                ),
             ];
             if let Some(sid_tensor) = speaker_id {
-                inputs.push(Value::from_array(sid_tensor).unwrap());
+                inputs.push(ort::SessionInputValue::from(
+                    Value::from_array(sid_tensor).unwrap()
+                ));
             }
             match session.run(SessionInputs::from(inputs.as_slice())) {
                 Ok(out) => out,
@@ -380,7 +388,7 @@ impl VitsModel {
         };
         let inference_ms = timer.elapsed().as_millis() as f32;
 
-        let outputs = match outputs[0].extract_tensor::<f32>() {
+        let outputs = match outputs[0].try_extract_tensor::<f32>() {
             Ok(out) => out,
             Err(e) => {
                 return Err(SonataError::OperationError(format!(
@@ -558,12 +566,20 @@ impl VitsStreamingModel {
         let session = &self.encoder_model;
         {
             let mut inputs = vec![
-                Value::from_array(phoneme_inputs).unwrap(),
-                Value::from_array(input_lengths).unwrap(),
-                Value::from_array(scales).unwrap(),
+                ort::SessionInputValue::from(
+                    Value::from_array(phoneme_inputs).unwrap()
+                ),
+                ort::SessionInputValue::from(
+                    Value::from_array(input_lengths).unwrap()
+                ),
+                ort::SessionInputValue::from(
+                    Value::from_array(scales).unwrap()
+                ),
             ];
             if let Some(sid_tensor) = speaker_id {
-                inputs.push(Value::from_array(sid_tensor).unwrap());
+                inputs.push(ort::SessionInputValue::from(
+                    Value::from_array(sid_tensor).unwrap()
+                ));
             }
             match session.run(SessionInputs::from(inputs.as_slice())) {
                 Ok(ort_values) => EncoderOutputs::from_values(ort_values),
@@ -673,6 +689,7 @@ impl SonataModel for VitsStreamingModel {
 struct EncoderOutputs {
     z: Array<f32, Dim<IxDynImpl>>,
     y_mask: Array<f32, Dim<IxDynImpl>>,
+    #[allow(dead_code)]
     p_duration: Option<Array<f32, Dim<IxDynImpl>>>,
     g: Array<f32, Dim<IxDynImpl>>,
 }
@@ -681,7 +698,7 @@ impl EncoderOutputs {
     #[inline(always)]
     fn from_values(values: SessionOutputs) -> SonataResult<Self> {
         let z = {
-            let z_t = match values["z"].extract_tensor::<f32>() {
+            let z_t = match values["z"].try_extract_tensor::<f32>() {
                 Ok(out) => out,
                 Err(e) => {
                     return Err(SonataError::OperationError(format!(
@@ -693,7 +710,7 @@ impl EncoderOutputs {
             z_t.view().clone().into_owned()
         };
         let y_mask = {
-            let y_mask_t = match values["y_mask"].extract_tensor::<f32>() {
+            let y_mask_t = match values["y_mask"].try_extract_tensor::<f32>() {
                 Ok(out) => out,
                 Err(e) => {
                     return Err(SonataError::OperationError(format!(
@@ -705,7 +722,7 @@ impl EncoderOutputs {
             y_mask_t.view().clone().into_owned()
         };
         let p_duration = if values.contains_key("p_duration") {
-            let p_duration_t = match values["p_duration"].extract_tensor::<f32>() {
+            let p_duration_t = match values["p_duration"].try_extract_tensor::<f32>() {
                 Ok(out) => out,
                 Err(e) => {
                     return Err(SonataError::OperationError(format!(
@@ -719,7 +736,7 @@ impl EncoderOutputs {
             None
         };
         let g = if values.contains_key("g") {
-            let g_t = match values["g"].extract_tensor::<f32>() {
+            let g_t = match values["g"].try_extract_tensor::<f32>() {
                 Ok(out) => out,
                 Err(e) => {
                     return Err(SonataError::OperationError(format!(
@@ -737,11 +754,17 @@ impl EncoderOutputs {
     fn infer_decoder(&self, session: &ort::Session) -> SonataResult<AudioSamples> {
         let outputs = {
             let mut inputs = vec![
-                Value::from_array(self.z.view()).unwrap(),
-                Value::from_array(self.y_mask.view()).unwrap(),
+                ort::SessionInputValue::from(
+                    Value::from_array(self.z.view()).unwrap()
+                ),
+                ort::SessionInputValue::from(
+                    Value::from_array(self.y_mask.view()).unwrap()
+                ),
             ];
             if !self.g.is_empty() {
-                inputs.push(Value::from_array(self.g.view()).unwrap())
+                inputs.push(ort::SessionInputValue::from(
+                    Value::from_array(self.g.view()).unwrap()
+                ));
             }
             match session.run(SessionInputs::from(inputs.as_slice())) {
                 Ok(out) => out,
@@ -753,7 +776,7 @@ impl EncoderOutputs {
                 }
             }
         };
-        match outputs[0].extract_tensor::<f32>() {
+        match outputs[0].try_extract_tensor::<f32>() {
             Ok(out) => Ok(Vec::from(out.view().as_slice().unwrap()).into()),
             Err(e) => Err(SonataError::OperationError(format!(
                 "Failed to run model inference. Error: {}",
@@ -804,11 +827,17 @@ impl SpeechStreamer {
             let z_chunk = z_view.slice_axis(Axis(2), mel_index);
             let y_mask_chunk = y_mask_view.slice_axis(Axis(2), mel_index);
             let mut inputs = vec![
-                Value::from_array(z_chunk).unwrap(),
-                Value::from_array(y_mask_chunk).unwrap(),
+                ort::SessionInputValue::from(
+                    Value::from_array(z_chunk).unwrap()
+                ),
+                ort::SessionInputValue::from(
+                    Value::from_array(y_mask_chunk).unwrap()
+                ),
             ];
             if !self.encoder_outputs.g.is_empty() {
-                inputs.push(Value::from_array(self.encoder_outputs.g.view()).unwrap())
+                inputs.push(ort::SessionInputValue::from(
+                    Value::from_array(self.encoder_outputs.g.view()).unwrap()
+                ));
             }
             let outputs = session
                 .run(SessionInputs::from(inputs.as_slice()))
@@ -818,7 +847,7 @@ impl SpeechStreamer {
                         e
                     ))
                 })?;
-            let audio_t = outputs[0].extract_tensor::<f32>().map_err(|e| {
+            let audio_t = outputs[0].try_extract_tensor::<f32>().map_err(|e| {
                 SonataError::OperationError(format!("Failed to run model inference. Error: {}", e))
             })?;
             self.process_chunk_audio(audio_t.view().view(), audio_index)?
