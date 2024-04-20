@@ -12,9 +12,16 @@ default = []
 ort-dylib = ["ort/load-dynamic"]
 
 [dependencies]
+espeak-phonemizer = { path = "../espeak-phonemizer" }
 sonata-core = { path = "../sonata/core" }
 sonata-synth = { path = "../sonata/synth" }
 sonata-piper = { path = "../sonata/models/piper" }
+once_cell = "1.19.0"
+
+[dependencies.libtashkeel_base]
+version = "1.2.0"
+default-features = false
+features = ["ort", "rayon"]
 
 [dependencies.pyo3]
 version = "0.20.0"

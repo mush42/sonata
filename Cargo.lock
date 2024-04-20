@@ -1913,7 +1913,10 @@ dependencies = [
 name = "sonata-python"
 version = "0.2.0"
 dependencies = [
+ "espeak-phonemizer",
  "fs_extra",
+ "libtashkeel_base",
+ "once_cell",
  "ort",
  "pyo3",
  "sonata-core",
