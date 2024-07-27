@@ -26,11 +26,10 @@ jobs:
           - runner: ubuntu-latest
             target: aarch64
     steps:
-      - name: setup-env
-        run:
-          - git config --global protocol.file.allow always
-          - sudo apt-get update
-          - sudo apt-get install libclang-dev
+      - name: git-submodule-fix
+        run: git config --global protocol.file.allow always
+      - name: install libclang
+        run:  sudo apt-get update && sudo apt-get install libclang-dev
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -61,10 +60,10 @@ jobs:
           - runner: windows-latest
             target: x86
     steps:
-      - name: setup-env
-        run:
-          - git config --global protocol.file.allow always
-          - choco install llvm --version=12.0.0
+      - name: git-submodule-fix
+        run: git config --global protocol.file.allow always
+      - name: install-clang
+        run: choco install llvm --version=12.0.0
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -95,9 +94,8 @@ jobs:
           - runner: macos-14
             target: aarch64
     steps:
-      - name: setup-env
-        run:
-          git config --global protocol.file.allow always
+      - name: git-submodule-fix
+        run: git config --global protocol.file.allow always
       - uses: actions/checkout@v4
         with:
           submodules: recursive
