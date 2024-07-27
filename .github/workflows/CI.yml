@@ -26,9 +26,11 @@ jobs:
           - runner: ubuntu-latest
             target: aarch64
     steps:
-      - name: git-submodule-workaround
+      - name: setup-env
         run:
           git config --global protocol.file.allow always
+          sudo apt-get update
+          sudo apt-get install libclang-dev
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -49,41 +51,6 @@ jobs:
           name: wheels-linux-${{ matrix.platform.target }}
           path: dist
 
-  musllinux:
-    runs-on: ${{ matrix.platform.runner }}
-    strategy:
-      matrix:
-        platform:
-          - runner: ubuntu-latest
-            target: x86_64
-          - runner: ubuntu-latest
-            target: x86
-          - runner: ubuntu-latest
-            target: aarch64
-    steps:
-      - name: git-submodule-workaround
-        run:
-          git config --global protocol.file.allow always
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - uses: actions/setup-python@v5
-        with:
-          python-version: 3.x
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.platform.target }}
-          args: --release --out dist
-          working-directory: ./sonata-python
-          sccache: 'true'
-          manylinux: musllinux_1_2
-      - name: Upload wheels
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-musllinux-${{ matrix.platform.target }}
-          path: dist
-
   windows:
     runs-on: ${{ matrix.platform.runner }}
     strategy:
@@ -94,9 +61,10 @@ jobs:
           - runner: windows-latest
             target: x86
     steps:
-      - name: git-submodule-workaround
+      - name: setup-env
         run:
           git config --global protocol.file.allow always
+          choco install llvm --version=12.0.0
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -127,7 +95,7 @@ jobs:
           - runner: macos-14
             target: aarch64
     steps:
-      - name: git-submodule-workaround
+      - name: setup-env
         run:
           git config --global protocol.file.allow always
       - uses: actions/checkout@v4
