@@ -29,7 +29,7 @@ jobs:
       - name: git-submodule-fix
         run: git config --global protocol.file.allow always
       - name: install libclang
-        run:  sudo apt-get update && sudo apt-get install libclang-dev
+        run:  sudo apt-get update && sudo apt-get install  llvm llvm-dev llvm-runtime libclang-dev
       - uses: actions/checkout@v4
         with:
           submodules: recursive
