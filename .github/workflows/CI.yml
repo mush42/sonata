@@ -28,9 +28,9 @@ jobs:
     steps:
       - name: setup-env
         run:
-          git config --global protocol.file.allow always
-          sudo apt-get update
-          sudo apt-get install libclang-dev
+          - git config --global protocol.file.allow always
+          - sudo apt-get update
+          - sudo apt-get install libclang-dev
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -63,8 +63,8 @@ jobs:
     steps:
       - name: setup-env
         run:
-          git config --global protocol.file.allow always
-          choco install llvm --version=12.0.0
+          - git config --global protocol.file.allow always
+          - choco install llvm --version=12.0.0
       - uses: actions/checkout@v4
         with:
           submodules: recursive
