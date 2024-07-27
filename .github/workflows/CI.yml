@@ -26,6 +26,9 @@ jobs:
           - runner: ubuntu-latest
             target: aarch64
     steps:
+      - name: git-submodule-workaround
+        run:
+          git config --global protocol.file.allow always
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -58,6 +61,9 @@ jobs:
           - runner: ubuntu-latest
             target: aarch64
     steps:
+      - name: git-submodule-workaround
+        run:
+          git config --global protocol.file.allow always
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -88,6 +94,9 @@ jobs:
           - runner: windows-latest
             target: x86
     steps:
+      - name: git-submodule-workaround
+        run:
+          git config --global protocol.file.allow always
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -118,6 +127,9 @@ jobs:
           - runner: macos-14
             target: aarch64
     steps:
+      - name: git-submodule-workaround
+        run:
+          git config --global protocol.file.allow always
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -140,6 +152,9 @@ jobs:
   sdist:
     runs-on: ubuntu-latest
     steps:
+      - name: git-submodule-workaround
+        run:
+          git config --global protocol.file.allow always
       - uses: actions/checkout@v4
         with:
           submodules: recursive
