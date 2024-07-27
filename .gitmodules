@@ -7,6 +7,3 @@
 [submodule "deps/espeak-ng"]
 	path = deps/espeak-ng
 	url = https://github.com/rhasspy/espeak-ng
-[submodule "deps/tqsm"]
-	path = deps/tqsm
-	url = C:\\Users\\ibnom\\temp\\tqsm
