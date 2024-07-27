@@ -63,7 +63,7 @@ jobs:
       - name: git-submodule-fix
         run: git config --global protocol.file.allow always
       - name: install-clang
-        run: choco install llvm --version=12.0.0
+        run: choco install llvm
       - uses: actions/checkout@v4
         with:
           submodules: recursive
