@@ -14,7 +14,8 @@ members = [
     "libtorch-inference",
     "sonic-sys",
     "audio-ops",
-    "examples/usage"
+    "examples/usage",
+    "examples/play"
 , "examples/usage"]
 
 [patch.crates-io]
