@@ -70,3 +70,10 @@ docs/_build/
 
 # Pyenv
 .python-version
+
+# Assets
+*.onnx
+espeak-ng-data/
+*.onnx.json
+*.tar.bz2
+*.wav
