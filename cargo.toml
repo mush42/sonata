@@ -13,8 +13,9 @@ members = [
     "espeak-phonemizer",
     "libtorch-inference",
     "sonic-sys",
-    "audio-ops"
-]
+    "audio-ops",
+    "examples/usage"
+, "examples/usage"]
 
 [patch.crates-io]
 libtashkeel_base = { path = "./deps/libtashkeel/libtashkeel_base" }
