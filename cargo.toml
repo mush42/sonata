@@ -10,8 +10,9 @@ members = [
     "crates/sonata/capi",
     "crates/sonata/cli",
     "crates/text/espeak-phonemizer",
+    "crates/audio/istft-sys",
     "crates/audio/sonic-sys",
-    "crates/audio/ops"
+    "crates/audio/ops",
 ]
 
 [patch.crates-io]

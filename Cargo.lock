@@ -897,6 +897,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "istft-sys"
+version = "1.0.0"
+dependencies = [
+ "cmake",
+ "ffi-support",
+ "once_cell",
+]
+
+[[package]]
 name = "itertools"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

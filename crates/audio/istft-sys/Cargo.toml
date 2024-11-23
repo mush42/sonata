@@ -1,0 +1,11 @@
+[package]
+name = "istft-sys"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+ffi-support = "0.4.4"
+once_cell = "1.18.0"
+
+[build-dependencies]
+cmake = "0.1.50"
