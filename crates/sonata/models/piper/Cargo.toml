@@ -4,9 +4,9 @@ version = "0.2.0"
 edition = "2021"
 
 [dependencies]
-espeak-phonemizer = { path = "../../../espeak-phonemizer" }
+espeak-phonemizer = { path = "../../../text/espeak-phonemizer" }
 sonata-core = { path = "../../core" }
-ndarray = "0.15.6"
+ndarray = "0.16.1"
 serde = { version = "1.0.160", features = ["derive"] }
 serde_json = "1.0.89"
 

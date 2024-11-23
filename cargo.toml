@@ -2,18 +2,16 @@
 resolver = "2"
 
 members = [
-    "sonata/core",
-    "sonata/synth",
-    "sonata/models/piper",
-    "sonata/models/vocoders",
-    "sonata-grpc",
-    "sonata-python",
-    "libsonata",
-    "sonata-cli",
-    "espeak-phonemizer",
-    "libtorch-inference",
-    "sonic-sys",
-    "audio-ops"
+    "crates/sonata/core",
+    "crates/sonata/synth",
+    "crates/sonata/models/piper",
+    "crates/sonata/grpc",
+    "crates/sonata/python",
+    "crates/sonata/capi",
+    "crates/sonata/cli",
+    "crates/text/espeak-phonemizer",
+    "crates/audio/sonic-sys",
+    "crates/audio/ops"
 ]
 
 [patch.crates-io]

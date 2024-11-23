@@ -10,3 +10,6 @@
 [submodule "deps/tqsm"]
 	path = deps/tqsm
 	url = https://github.com/mush42/tqsm
+[submodule "deps/nanosnap"]
+	path = deps/nanosnap
+	url = https://github.com/lighttransport/nanosnap

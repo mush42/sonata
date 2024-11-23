@@ -8,8 +8,8 @@ name = "sonata_synth"
 
 [dependencies]
 sonata-core = { path = "../core" }
-sonic-sys = { path = "../../sonic-sys" }
-audio-ops = { path = "../../audio-ops" }
+sonic-sys = { path = "../../audio/sonic-sys" }
+audio-ops = { path = "../../audio/ops" }
 rayon = "1.7.0"
 once_cell = "1.18.0"
 flume = { version = "0.11.0", default-features = false, features = ["async"] }

@@ -3,16 +3,16 @@ use std::path::PathBuf;
 
 fn main() {
     println!("cargo:rustc-link-lib=static=libsonic");
-    println!("cargo:rerun-if-changed=../deps/sonic/sonic.h");
-    println!("cargo:rerun-if-changed=../deps/sonic/sonic.c");
+    println!("cargo:rerun-if-changed=../../../deps/sonic/sonic.h");
+    println!("cargo:rerun-if-changed=../../../deps/sonic/sonic.c");
 
     cc::Build::new()
-        .file("../deps/sonic/sonic.c")
-        .include("../deps/sonic/sonic.h")
+        .file("../../../deps/sonic/sonic.c")
+        .include("../../../deps/sonic/sonic.h")
         .compile("libsonic");
 
     let bindings = bindgen::Builder::default()
-        .header("../deps/sonic/sonic.h")
+        .header("../../../deps/sonic/sonic.h")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks))
         .generate()
         .expect("Unable to generate bindings");
