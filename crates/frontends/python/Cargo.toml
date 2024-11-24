@@ -28,7 +28,7 @@ version = "0.20.0"
 features = ["extension-module", "abi3-py37"]
 
 [dependencies.ort]
-version = "2.0.0-rc.1"
+version = "2.0.0-rc.9"
 
 [build-dependencies]
 fs_extra = "1.3.0"
