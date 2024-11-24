@@ -1,5 +1,5 @@
 use espeak_phonemizer::text_to_phonemes;
-use libtashkeel_base::do_tashkeel;
+use libtashkeel_core::do_tashkeel;
 use ndarray::Axis;
 use ndarray::{Array, Array1, Array2, ArrayView, Dim, IxDynImpl};
 use ort::{Session, SessionInputs, SessionOutputs, Value};
@@ -62,9 +62,9 @@ fn load_model_config(config_path: &Path) -> SonataResult<(ModelConfig, PiperSynt
 
 fn create_tashkeel_engine(
     config: &ModelConfig,
-) -> SonataResult<Option<libtashkeel_base::DynamicInferenceEngine>> {
+) -> SonataResult<Option<libtashkeel_core::DynamicInferenceEngine>> {
     if config.espeak.voice == "ar" {
-        match libtashkeel_base::create_inference_engine(None) {
+        match libtashkeel_core::create_inference_engine(None) {
             Ok(engine) => Ok(Some(engine)),
             Err(msg) => Err(SonataError::OperationError(format!(
                 "Failed to create inference engine for libtashkeel. {}",
@@ -169,7 +169,7 @@ trait VitsModelCommons {
     fn get_synth_config(&self) -> &RwLock<PiperSynthesisConfig>;
     fn get_config(&self) -> &ModelConfig;
     fn get_speaker_map(&self) -> &HashMap<i64, String>;
-    fn get_tashkeel_engine(&self) -> Option<&libtashkeel_base::DynamicInferenceEngine>;
+    fn get_tashkeel_engine(&self) -> Option<&libtashkeel_core::DynamicInferenceEngine>;
     fn get_meta_ids(&self) -> (i64, i64, i64) {
         let config = self.get_config();
         let pad_id = *config.phoneme_id_map.get(&PAD).unwrap().first().unwrap();
@@ -293,7 +293,7 @@ pub struct VitsModel {
     config: ModelConfig,
     speaker_map: HashMap<i64, String>,
     session: ort::Session,
-    tashkeel_engine: Option<libtashkeel_base::DynamicInferenceEngine>,
+    tashkeel_engine: Option<libtashkeel_core::DynamicInferenceEngine>,
 }
 
 impl VitsModel {
@@ -319,7 +319,7 @@ impl VitsModel {
         };
         let speaker_map = reversed_mapping(&config.speaker_id_map);
         let tashkeel_engine = if config.espeak.voice == "ar" {
-            match libtashkeel_base::create_inference_engine(None) {
+            match libtashkeel_core::create_inference_engine(None) {
                 Ok(engine) => Some(engine),
                 Err(msg) => {
                     return Err(SonataError::OperationError(format!(
@@ -421,7 +421,7 @@ impl VitsModelCommons for VitsModel {
     fn get_speaker_map(&self) -> &HashMap<i64, String> {
         &self.speaker_map
     }
-    fn get_tashkeel_engine(&self) -> Option<&libtashkeel_base::DynamicInferenceEngine> {
+    fn get_tashkeel_engine(&self) -> Option<&libtashkeel_core::DynamicInferenceEngine> {
         self.tashkeel_engine.as_ref()
     }
 }
@@ -492,7 +492,7 @@ pub struct VitsStreamingModel {
     speaker_map: HashMap<i64, String>,
     encoder_model: ort::Session,
     decoder_model: Arc<ort::Session>,
-    tashkeel_engine: Option<libtashkeel_base::DynamicInferenceEngine>,
+    tashkeel_engine: Option<libtashkeel_core::DynamicInferenceEngine>,
 }
 
 impl VitsStreamingModel {
@@ -602,7 +602,7 @@ impl VitsModelCommons for VitsStreamingModel {
     fn get_speaker_map(&self) -> &HashMap<i64, String> {
         &self.speaker_map
     }
-    fn get_tashkeel_engine(&self) -> Option<&libtashkeel_base::DynamicInferenceEngine> {
+    fn get_tashkeel_engine(&self) -> Option<&libtashkeel_core::DynamicInferenceEngine> {
         self.tashkeel_engine.as_ref()
     }
 }

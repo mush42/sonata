@@ -5,10 +5,10 @@ members = [
     "crates/sonata/core",
     "crates/sonata/synth",
     "crates/sonata/models/piper",
-    "crates/sonata/grpc",
-    "crates/sonata/python",
-    "crates/sonata/capi",
-    "crates/sonata/cli",
+    "crates/frontends/grpc",
+    "crates/frontends/python",
+    "crates/frontends/capi",
+    "crates/frontends/cli",
     "crates/text/espeak-phonemizer",
     "crates/audio/istft-sys",
     "crates/audio/sonic-sys",
@@ -16,7 +16,7 @@ members = [
 ]
 
 [patch.crates-io]
-libtashkeel_base = { path = "./deps/libtashkeel/libtashkeel_base" }
+libtashkeel_core = { path = "./deps/libtashkeel/crates/core" }
 
 [profile.release]
 opt-level = 3

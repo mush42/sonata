@@ -11,9 +11,9 @@ ort-dylib = ["ort/load-dynamic"]
 async-stream = "0.3.5"
 env_logger = "0.10.0"
 log = "0.4.18"
-sonata-core = { version = "0.2.0", path = "../core" }
-sonata-synth = { version = "0.2.0", path = "../synth" }
-sonata-piper = { version = "0.2.0", path = "../models/piper" }
+sonata-core = { version = "0.2.0", path = "../../sonata/core" }
+sonata-synth = { version = "0.2.0", path = "../../sonata/synth" }
+sonata-piper = { version = "0.2.0", path = "../../sonata/models/piper" }
 prost = "0.12.4"
 tokio = { version = "1.37.0", features = ["macros", "rt-multi-thread"] }
 tokio-stream = "0.1.15"
