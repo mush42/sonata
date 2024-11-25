@@ -1,8 +1,8 @@
 use espeak_phonemizer::text_to_phonemes;
 use libtashkeel_core::do_tashkeel;
-use ndarray::Axis;
-use ndarray::{Array, Array1, Array2, ArrayView, Dim, IxDynImpl};
-use ort::{Session, SessionInputs, SessionOutputs, Value};
+use ndarray::{Array, Array1, Array2, ArrayView, Axis, Dim, IxDynImpl};
+use ort::session::Session;
+use ort::session::output::SessionOutputs;
 use serde::Deserialize;
 use sonata_core::{
     Audio, AudioInfo, AudioSamples, AudioStreamIterator, Phonemes, SonataAudioResult, SonataError,
@@ -76,7 +76,7 @@ fn create_tashkeel_engine(
     }
 }
 
-fn create_inference_session(model_path: &Path) -> Result<ort::Session, ort::Error> {
+fn create_inference_session(model_path: &Path) -> Result<Session, ort::Error> {
     Session::builder()?
         // .with_parallel_execution(true)?
         // .with_inter_threads(16)?
@@ -292,7 +292,7 @@ pub struct VitsModel {
     synth_config: RwLock<PiperSynthesisConfig>,
     config: ModelConfig,
     speaker_map: HashMap<i64, String>,
-    session: ort::Session,
+    session: Session,
     tashkeel_engine: Option<libtashkeel_core::DynamicInferenceEngine>,
 }
 
@@ -360,23 +360,14 @@ impl VitsModel {
         let session = &self.session;
         let timer = std::time::Instant::now();
         let outputs = {
-            let mut inputs = vec![
-                ort::SessionInputValue::from(
-                    Value::from_array(phoneme_inputs).unwrap()
-                ),
-                ort::SessionInputValue::from(
-                    Value::from_array(input_lengths).unwrap()
-                ),
-                ort::SessionInputValue::from(
-                    Value::from_array(scales).unwrap()
-                ),
-            ];
-            if let Some(sid_tensor) = speaker_id {
-                inputs.push(ort::SessionInputValue::from(
-                    Value::from_array(sid_tensor).unwrap()
-                ));
-            }
-            match session.run(SessionInputs::from(inputs.as_slice())) {
+            let outputs = if let Some(sid_tensor) = speaker_id.clone() {
+                let inputs = ort::inputs![phoneme_inputs, input_lengths, scales, sid_tensor].unwrap();
+                session.run(inputs)
+            } else {
+                let inputs = ort::inputs![phoneme_inputs, input_lengths, scales].unwrap();
+                session.run(inputs)
+            };
+            match outputs {
                 Ok(out) => out,
                 Err(e) => {
                     return Err(SonataError::OperationError(format!(
@@ -490,8 +481,8 @@ pub struct VitsStreamingModel {
     synth_config: RwLock<PiperSynthesisConfig>,
     config: ModelConfig,
     speaker_map: HashMap<i64, String>,
-    encoder_model: ort::Session,
-    decoder_model: Arc<ort::Session>,
+    encoder_model: Session,
+    decoder_model: Arc<Session>,
     tashkeel_engine: Option<libtashkeel_core::DynamicInferenceEngine>,
 }
 
@@ -565,23 +556,14 @@ impl VitsStreamingModel {
 
         let session = &self.encoder_model;
         {
-            let mut inputs = vec![
-                ort::SessionInputValue::from(
-                    Value::from_array(phoneme_inputs).unwrap()
-                ),
-                ort::SessionInputValue::from(
-                    Value::from_array(input_lengths).unwrap()
-                ),
-                ort::SessionInputValue::from(
-                    Value::from_array(scales).unwrap()
-                ),
-            ];
-            if let Some(sid_tensor) = speaker_id {
-                inputs.push(ort::SessionInputValue::from(
-                    Value::from_array(sid_tensor).unwrap()
-                ));
-            }
-            match session.run(SessionInputs::from(inputs.as_slice())) {
+            let outputs = if let Some(sid_tensor) = speaker_id.clone() {
+                let inputs = ort::inputs![phoneme_inputs, input_lengths, scales, sid_tensor].unwrap();
+                session.run(inputs)
+            } else {
+                let inputs = ort::inputs![phoneme_inputs, input_lengths, scales].unwrap();
+                session.run(inputs)
+            };
+            match outputs {
                 Ok(ort_values) => EncoderOutputs::from_values(ort_values),
                 Err(e) => Err(SonataError::OperationError(format!(
                     "Failed to run model inference. Error: {}",
@@ -751,22 +733,16 @@ impl EncoderOutputs {
         };
         Ok(Self { z, y_mask, p_duration, g })
     }
-    fn infer_decoder(&self, session: &ort::Session) -> SonataResult<AudioSamples> {
+    fn infer_decoder(&self, session: &Session) -> SonataResult<AudioSamples> {
         let outputs = {
-            let mut inputs = vec![
-                ort::SessionInputValue::from(
-                    Value::from_array(self.z.view()).unwrap()
-                ),
-                ort::SessionInputValue::from(
-                    Value::from_array(self.y_mask.view()).unwrap()
-                ),
-            ];
-            if !self.g.is_empty() {
-                inputs.push(ort::SessionInputValue::from(
-                    Value::from_array(self.g.view()).unwrap()
-                ));
-            }
-            match session.run(SessionInputs::from(inputs.as_slice())) {
+            let session_outputs = if self.g.is_empty() {
+                let inputs = ort::inputs![self.z.view(), self.y_mask.view()].unwrap();
+                session.run(inputs)
+            } else {
+                let inputs = ort::inputs![self.z.view(), self.y_mask.view(), self.g.view()].unwrap();
+                session.run(inputs)
+            };
+            match session_outputs {
                 Ok(out) => out,
                 Err(e) => {
                     return Err(SonataError::OperationError(format!(
@@ -787,7 +763,7 @@ impl EncoderOutputs {
 }
 
 struct SpeechStreamer {
-    decoder_model: Arc<ort::Session>,
+    decoder_model: Arc<Session>,
     encoder_outputs: EncoderOutputs,
     mel_chunker: AdaptiveMelChunker,
     one_shot: bool,
@@ -795,7 +771,7 @@ struct SpeechStreamer {
 
 impl SpeechStreamer {
     fn new(
-        decoder_model: Arc<ort::Session>,
+        decoder_model: Arc<Session>,
         encoder_outputs: EncoderOutputs,
         chunk_size: usize,
         chunk_padding: usize,
@@ -821,26 +797,19 @@ impl SpeechStreamer {
     ) -> SonataResult<AudioSamples> {
         // println!("Mel index: {:?}\nAudio Index: {:?}", mel_index, audio_index);
         let audio = {
-            let session = Arc::clone(&self.decoder_model);
+            let session: Arc<Session> = Arc::clone(&self.decoder_model);
             let z_view = self.encoder_outputs.z.view();
             let y_mask_view = self.encoder_outputs.y_mask.view();
             let z_chunk = z_view.slice_axis(Axis(2), mel_index);
             let y_mask_chunk = y_mask_view.slice_axis(Axis(2), mel_index);
-            let mut inputs = vec![
-                ort::SessionInputValue::from(
-                    Value::from_array(z_chunk).unwrap()
-                ),
-                ort::SessionInputValue::from(
-                    Value::from_array(y_mask_chunk).unwrap()
-                ),
-            ];
-            if !self.encoder_outputs.g.is_empty() {
-                inputs.push(ort::SessionInputValue::from(
-                    Value::from_array(self.encoder_outputs.g.view()).unwrap()
-                ));
-            }
-            let outputs = session
-                .run(SessionInputs::from(inputs.as_slice()))
+            let outputs = if self.encoder_outputs.g.is_empty() {
+                let inputs = ort::inputs![z_chunk, y_mask_chunk].unwrap();
+                session.run(inputs)
+            } else {
+                let inputs = ort::inputs![z_chunk, y_mask_chunk, self.encoder_outputs.g.view()].unwrap();
+                session.run(inputs)
+            };
+            let outputs = outputs
                 .map_err(|e| {
                     SonataError::OperationError(format!(
                         "Failed to run model inference. Error: {}",
