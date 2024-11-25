@@ -4,7 +4,7 @@ use sonata_synth::{
     SonataSpeechSynthesizer, RealtimeSpeechStream
 };
 use sonata_piper::PiperSynthesisConfig;
-use libtashkeel_base::{LibtashkeelResult, DynamicInferenceEngine as TashkeelInferenceEngine, do_tashkeel};
+use libtashkeel_core::{LibtashkeelResult, DynamicInferenceEngine as TashkeelInferenceEngine, do_tashkeel};
 use once_cell::sync::Lazy;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 static LIBTASHKEEL_ENGINE: Lazy<LibtashkeelResult<TashkeelInferenceEngine>>=
-    Lazy::new(|| libtashkeel_base::create_inference_engine(None));
+    Lazy::new(|| libtashkeel_core::create_inference_engine(None));
 type PySonataResult<T> = Result<T, PySonataError>;
 
 create_exception!(

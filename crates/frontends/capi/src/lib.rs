@@ -339,10 +339,10 @@ fn init_ort_environment()  {
     INIT_ORT_ENVIRONMENT.call_once(|| {
         let execution_providers = [
             #[cfg(target_os = "android")]
-            ort::ExecutionProviderDispatch::NNAPI(Default::default()),
+            ort::execution_providers::NNAPIExecutionProvider::default().build(),
             #[cfg(target_os = "ios")]
-            ort::ExecutionProviderDispatch::CoreML(Default::default()),
-            ort::ExecutionProviderDispatch::CPU(Default::default()),
+            ort::execution_providers::CoreMLExecutionProvider::default().build(),
+            ort::execution_providers::CPUExecutionProvider::default().build(),
         ];
         ort::init()
             .with_name("sonata")

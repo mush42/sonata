@@ -418,7 +418,9 @@ fn setup_logging() {
 fn init_ort_environment() -> bool {
     ort::init()
         .with_name("sonata")
-        .with_execution_providers([ort::ExecutionProviderDispatch::CPU(Default::default())])
+        .with_execution_providers([
+            ort::execution_providers::CPUExecutionProvider::default().build()
+        ])
         .commit()
         .is_ok()
 }
